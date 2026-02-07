@@ -1,0 +1,2 @@
+# Affymetrix_Microarray_data_preprocessing_GEO_datasets
+preprocessing of affymetrix microarray dataset for data analysis 
