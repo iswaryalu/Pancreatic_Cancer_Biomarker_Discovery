@@ -1,0 +1,21 @@
+# sequencing / raw data
+*.fastq
+*.fq
+*.bam
+*.sam
+*.gz
+
+# large R objects
+*.rds
+*.RData
+
+# R temporary
+.Rhistory
+.RData
+.Rproj.user/
+
+# python cache
+__pycache__/
+
+# system
+.DS_Store
