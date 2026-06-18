@@ -34,13 +34,20 @@ meta <- read.csv(
 # =========================
 # 4️⃣ Recode Groups
 # =========================
-meta$group <- ifelse(meta$Group %in% c("PC+Diabetes","PC only"), "Tumor",
-                     ifelse(meta$Group %in% c("Diabetes only","Healthy"), "Control", NA))
+# =========================
+# 4️⃣ Subset ONLY PC vs Healthy
+# =========================
+meta$group <- NA
 
+meta$group[meta$Group == "PC only"] <- "Tumor"
+meta$group[meta$Group == "Healthy"] <- "Control"
+
+# Remove all other samples (PC+Diabetes, Diabetes only)
 meta <- meta[!is.na(meta$group), ]
+
 meta$group <- factor(meta$group, levels=c("Control","Tumor"))
 
-cat("Group distribution:\n")
+cat("Filtered Group distribution:\n")
 print(table(meta$group))
 
 # =========================
@@ -102,7 +109,7 @@ print(ci.auc(roc_panel, method="bootstrap", boot.n=2000))
 
 single_auc <- data.frame(Gene=character(), AUC=numeric())
 
-dir.create("~/work/r_project_ishu/validation_blood/dataset-2/results/single_gene_ROC",
+dir.create("~/work/r_project_ishu/validation_blood/dataset-2/plots/single_gene_ROC_april2",
            showWarnings = FALSE)
 
 for (gene in common_genes) {
@@ -115,8 +122,8 @@ for (gene in common_genes) {
                       data.frame(Gene=gene, AUC=as.numeric(auc_val)))
   
   # Save individual ROC
-  png(paste0("~/work/r_project_ishu/validation_blood/dataset-2/plots/single_gene_ROC/",
-             gene, "_ROC.png"),
+  png(paste0("~/work/r_project_ishu/validation_blood/dataset-2/plots/single_gene_ROC_april2/",
+             gene, "_ROC_april2.png"),
       width=700, height=600)
   
   plot(roc_single,
@@ -136,7 +143,7 @@ single_auc <- single_auc[order(-single_auc$AUC), ]
 
 print(single_auc)
 write.csv(single_auc,
-          "~/work/r_project_ishu/validation_blood/dataset-2/results/GSE15932_single_gene_AUC.csv",
+          "~/work/r_project_ishu/validation_blood/dataset-2/results/GSE15932_single_gene_AUC_april2.csv",
           row.names=FALSE)
 
 # =========================
@@ -145,41 +152,94 @@ write.csv(single_auc,
 # =========================
 # 9️⃣ Save Multi-Gene ROC (Base)
 # =========================
-png("~/work/r_project_ishu/validation_blood/dataset-2/plots/GSE15932_multi_gene_ROC.png",
-    width=800, height=700)
+# =========================
+# 9️⃣ Save Multi-Gene ROC (ENHANCED)
+# =========================
+png("~/work/r_project_ishu/validation_blood/dataset-2/plots/GSE15932_multi_gene_ROC_april2.png",
+    width=900, height=750)   # 🔥 bigger canvas
 
+# Plot ROC with stronger emphasis
 plot(roc_panel,
-     col="black",
-     lwd=3,
-     main="GSE15932 Multi-Gene Logistic ROC")
+     col="blue",
+     lwd=5,                       # 🔥 thicker curve
+     main="GSE15932 Multi-Gene Logistic ROC",
+     cex.main=1.5,                # 🔥 bigger title
+     
+     print.auc=TRUE,
+     print.auc.cex=1.5,           # 🔥 bigger AUC text
+     print.auc.y=0.25)
 
-text(0.6, 0.2,
-     labels=paste("AUC =", round(auc(roc_panel),3)),
-     cex=1.2)
+# Add diagonal reference line
+abline(a=0, b=1, lty=2, col="gray")
+
+# Add confidence interval
+ci_val <- ci.auc(roc_panel)
+
+text(0.6, 0.1,
+     labels=paste("95% CI:",
+                  round(ci_val[1],3), "-",
+                  round(ci_val[3],3)),
+     cex=1.2)                    # 🔥 bigger CI text
 
 dev.off()
-
 # Overlay ROC curves
 # =========================
-png("~/work/r_project_ishu/validation_blood/dataset-2/plots/GSE15932_ROC_overlay.png",
-    width=800, height=700)
+# =========================
+# Overlay ROC curves (IMPROVED + BIGGER LEGEND)
+# =========================
+png("~/work/r_project_ishu/validation_blood/dataset-2/plots/GSE15932_ROC_overlay_april2.png",
+    width=900, height=750)
 
-plot(roc_panel, col="black", lwd=3,
-     main="Multi vs Single Gene ROC")
+# ---- Multi-gene ROC (make dominant) ----
+plot(roc_panel,
+     col="black",
+     lwd=5,                          # 🔥 thicker line
+     main="Multi vs Single Gene ROC",
+     print.auc=TRUE,
+     print.auc.cex=1.4,
+     print.auc.y=0.25)
 
-cols <- rainbow(length(common_genes))
+# Prepare legend labels with AUC
+legend_labels <- c(
+  paste0("Multi-gene (AUC = ", round(auc(roc_panel), 3), ")")
+)
+
+# Define colors
+cols <- c("red", "blue", "green", "purple", "orange")
 
 i <- 1
 for (gene in common_genes) {
+  
   roc_single <- roc(df$group, df[[gene]])
+  auc_val <- auc(roc_single)
+  
+  # Add single gene ROC (thinner)
   plot(roc_single, add=TRUE, col=cols[i], lwd=2)
+  
+  # Add AUC to legend
+  legend_labels <- c(
+    legend_labels,
+    paste0(gene, " (AUC = ", round(auc_val, 3), ")")
+  )
+  
   i <- i + 1
 }
 
+# ---- BIGGER LEGEND ----
 legend("bottomright",
-       legend=c("Multi-gene", common_genes),
-       col=c("black", cols),
-       lwd=2)
+       legend = legend_labels,
+       col = c("black", cols),
+       lwd = c(5, rep(2, length(common_genes))),
+       
+       cex = 1.4,        # 🔥 bigger text
+       pt.cex = 1.6,     # 🔥 bigger line symbols
+       y.intersp = 1.5,  # 🔥 more vertical spacing
+       x.intersp = 1.3,  # 🔥 more horizontal spacing
+       seg.len = 3.5,    # 🔥 longer legend lines
+       
+       box.lwd = 2,      
+       inset = 0.02
+)
 
 dev.off()
 
@@ -197,10 +257,14 @@ print(opt_cut)
 # =========================
 # 11️⃣ Confusion Matrix at Optimal Cutoff
 # =========================
-threshold <- opt_cut["threshold"]
+# Select one threshold
+threshold <- opt_cut$threshold[1]   # choose row 1
 
 pred_class <- ifelse(pred >= threshold, "Tumor", "Control")
 pred_class <- factor(pred_class, levels=c("Control","Tumor"))
+
+cat("\nConfusion Matrix:\n")
+print(table(Predicted=pred_class, Actual=df$group))
 
 cat("\nConfusion Matrix:\n")
 print(table(Predicted=pred_class, Actual=df$group))
@@ -211,7 +275,7 @@ print(table(Predicted=pred_class, Actual=df$group))
 df$risk_score <- pred
 
 write.csv(df,
-          "~/work/r_project_ishu/validation_blood/dataset-2/results/GSE15932_RiskScores_clean.csv",
+          "~/work/r_project_ishu/validation_blood/dataset-2/results/GSE15932_RiskScores_clean_april2.csv",
           row.names=FALSE)
 
 # =========================
@@ -223,7 +287,7 @@ roc_df <- data.frame(
 )
 
 write.csv(roc_df,
-          "~/work/r_project_ishu/validation_blood/dataset-2/results/GSE15932_ROC_curve_clean.csv",
+          "~/work/r_project_ishu/validation_blood/dataset-2/results/GSE15932_ROC_curve_clean_april2.csv",
           row.names=FALSE)
 
 cat("\n✅ External validation completed successfully.\n")

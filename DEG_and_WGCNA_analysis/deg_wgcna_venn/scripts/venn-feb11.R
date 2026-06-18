@@ -9,8 +9,8 @@ library(grid)
 # -----------------------
 # Load data
 # -----------------------
-hub <- read.csv("WGCNA_hub_genes-feb11.csv")
-deg <- read.csv("~/work/r_project_ishu/plots/DEG_tumor_vs_adjacent_results.csv")
+hub <- read.csv("~/work/r_project_ishu/wgcna/results/feb11 results/WGCNA_hub_genes-feb11.csv")
+deg <- read.csv("~/work/r_project_ishu/deg/deg_results/DEG_tumor_vs_adjacent_results.csv")
 
 # -----------------------
 # Extract gene lists
@@ -25,7 +25,7 @@ deg_genes <- deg %>%
 # Intersection
 # -----------------------
 hub_deg_intersect <- intersect(hub_genes, deg_genes)
-write.table(hub_deg_intersect, "Hub_DEG_overlap_genes-feb11.txt", quote=FALSE, row.names=FALSE)
+write.table(hub_deg_intersect, "~/work/r_project_ishu/wgcna/results/feb11 results/Hub_DEG_overlap_genes-feb11.txt", quote=FALSE, row.names=FALSE)
 
 cat("Hub genes:", length(hub_genes), "\n")
 cat("DEGs:", length(deg_genes), "\n")
@@ -43,14 +43,32 @@ venn.plot <- venn.diagram(
   fill = c("red", "green"),
   alpha = 0.5,
   cex = 2,
-  cat.cex = 1.5,
+  
+  # ❌ REMOVE default labels completely
+  cat.cex = 0,
+  
+  margin = 0.1,
   main = "Overlap of WGCNA Hub Genes and DEGs"
 )
 
 grid.newpage()
 grid.draw(venn.plot)
 
-# Save figure
-png("WGCNA_DEG_Venn-feb11.png", width=1200, height=1000, res=150)
+png("~/work/r_project_ishu/venn/deg_wgcna_venn/deg_wgcna_plots/WGCNA_DEG_Venn-APRIL4.png",
+    width = 1200, height = 1000, res = 150)
+
+grid.newpage()
+
+# Draw Venn
 grid.draw(venn.plot)
+
+# Add labels INSIDE device
+grid.text("DEGs",
+          x = 0.28, y = 0.82,
+          gp = gpar(fontsize = 16, fontface = "bold"))
+
+grid.text("WGCNA Hub Genes",
+          x = 0.72, y = 0.82,
+          gp = gpar(fontsize = 16, fontface = "bold"))
+
 dev.off()
