@@ -1,6 +1,0 @@
-x
-MEgreen
-MEyellow
-MEblack
-MEmagenta
-MEpink

@@ -16,11 +16,17 @@ cat("Libraries loaded\n")
 # =========================
 # 2. LOAD DATA
 # =========================
-expr  <- read.csv("normalized_expression_matrix.csv", row.names = 1, check.names = FALSE)
-genes <- read.csv("Hub_DEG_overlap_genes-feb11.txt")
-meta  <- read.csv("meta_clean.csv", stringsAsFactors = FALSE)
+expr  <- read.csv("~/work/r_project_ishu/deg/data/normalized_expression_matrix.csv", row.names = 1, check.names = FALSE)
+genes <- read.delim("~/work/r_project_ishu/wgcna/results/feb11 results/Hub_DEG_overlap_genes-feb11.txt",
+                    header = TRUE,
+                    stringsAsFactors = FALSE,
+                    sep = "\t")
+meta  <- read.csv("~/work/r_project_ishu/deg/data/meta_clean.csv", stringsAsFactors = FALSE)
 
-gene_list <- unique(genes$Gene)
+gene_list <- unique(genes[[1]])
+
+cat("Total genes loaded:", length(gene_list), "\n")
+print(head(gene_list))
 
 # =========================
 # 3. PREPARE DATA
@@ -64,7 +70,7 @@ cat("OOB Error:",
 # =================================================
 # 📊 PANEL C — ERROR RATE VS TREES (PAPER FIGURE)
 # =================================================
-png("RF_error_vs_trees.png", width=900, height=700)
+png("~/work/r_project_ishu/ml/random_forest/plots/RF_error_vs_trees.png", width=900, height=700)
 
 plot(rf_model,
      main="Error Rate vs Number of Trees",
@@ -72,7 +78,7 @@ plot(rf_model,
      col=c("black","red","green"))
 
 legend("topright",
-       legend=c("OOB","Adjacent","Tumor"),
+       legend=c("Overall OOB","Adjacent","Tumor"),
        col=c("black","red","green"),
        lwd=2,
        bty="n")
@@ -94,7 +100,7 @@ imp_df <- data.frame(
 imp_df <- imp_df[order(-imp_df$Importance), ]
 
 # Save full ranking
-write.csv(imp_df, "RF_gene_importance_ranking.csv", row.names=FALSE)
+write.csv(imp_df, "~/work/r_project_ishu/ml/random_forest/results/RF_gene_importance_ranking.csv", row.names=FALSE)
 
 # =================================================
 # ⭐ SELECT GENES WITH IMPORTANCE > 1 (PAPER METHOD)
@@ -105,7 +111,7 @@ cat("Genes with importance > 1:", nrow(rf_selected), "\n")
 
 # Save selected genes
 write.csv(rf_selected,
-          "RF_genes_importance_gt1.csv",
+          "~/work/r_project_ishu/ml/random_forest/results/RF_genes_importance_gt1.csv",
           row.names = FALSE)
 
 # =================================================
@@ -122,14 +128,14 @@ p <- ggplot(top30,
        x="Mean Decrease in Gini",
        y="Feature")
 
-ggsave("RF_top30_gini.png", p, width=6, height=8, dpi=300)
+ggsave("~/work/r_project_ishu/ml/random_forest/plots/RF_top30_gini.png", p, width=6, height=8, dpi=300)
 
 # =================================================
 # 📄 EXPORT TOP GENES FOR INTERSECTION
 # =================================================
 top_rf_genes <- imp_df$Gene[1:30]
 write.csv(top_rf_genes,
-          "RF_top30_genes_for_intersection.csv",
+          "~/work/r_project_ishu/ml/random_forest/results/RF_top30_genes_for_intersection.csv",
           row.names=FALSE)
 
 cat("\n✅ Random Forest analysis completed.\n")
