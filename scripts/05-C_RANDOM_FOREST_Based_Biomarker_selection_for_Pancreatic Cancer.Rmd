@@ -1,0 +1,580 @@
+---
+title: "Random Forest-Based Biomarker Selection for Pancreatic Cancer"
+author: "Iswarya L U"
+date: "2026-02-22"
+output: html_document
+---
+
+# 1. Introduction
+
+This analysis performs **Random Forest classification** to identify candidate biomarkers capable of distinguishing pancreatic tumor samples from adjacent non-tumor samples.
+
+The candidate genes used for classification are obtained from the overlap between:
+
+- Differentially expressed genes (DEGs)
+- WGCNA hub genes
+
+Random Forest is an ensemble machine learning algorithm that constructs multiple decision trees and combines their predictions to improve classification performance.
+
+The workflow includes:
+
+1. Loading the normalized gene expression data.
+2. Loading the overlapping DEG and WGCNA hub gene list.
+3. Selecting tumor and adjacent non-tumor samples.
+4. Training a Random Forest classifier.
+5. Evaluating the out-of-bag (OOB) error.
+6. Ranking genes based on Mean Decrease in Gini importance.
+7. Selecting genes with importance greater than 1.
+8. Visualizing the top 30 most important genes.
+
+# 2. Setup
+
+```{r setup}
+rm(list = ls())
+
+options(stringsAsFactors = FALSE)
+
+set.seed(123)
+```
+
+The random seed is set to improve the reproducibility of the Random Forest analysis.
+
+# 3. Load Required Libraries
+
+```{r libraries}
+packages <- c(
+  "randomForest",
+  "ggplot2",
+  "dplyr"
+)
+
+for (p in packages) {
+  
+  if (!require(p, character.only = TRUE)) {
+    install.packages(p)
+  }
+  
+  library(p, character.only = TRUE)
+}
+
+cat("Libraries loaded\n")
+```
+
+The packages are used for:
+
+- `randomForest`: Random Forest model construction and feature importance analysis.
+- `ggplot2`: visualization.
+- `dplyr`: data manipulation.
+
+# 4. Load Data
+
+```{r load-data}
+expr <- read.csv(
+  "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/data/normalized_expression_matrix.csv",
+  row.names = 1,
+  check.names = FALSE
+)
+
+genes <- read.delim(
+  "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/results/integration of deg and wgcna/Hub_DEG_overlap_genes.csv",
+  header = TRUE,
+  stringsAsFactors = FALSE,
+  sep = ","
+)
+
+meta <- read.csv(
+  "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/data/meta_clean.csv"
+)
+```
+
+The analysis uses:
+
+- A normalized gene expression matrix.
+- A list of genes overlapping between DEG and WGCNA hub gene analyses.
+- Sample metadata containing tissue information.
+
+# 5. Prepare the Gene List
+
+The first column of the input gene file is extracted and duplicate genes are removed.
+
+```{r gene-list}
+gene_list <- unique(
+  genes[[1]]
+)
+
+cat(
+  "Total genes loaded:",
+  length(gene_list),
+  "\n"
+)
+
+head(gene_list)
+```
+
+# 6. Filter the Expression Matrix
+
+Only genes present in the overlap gene list are retained.
+
+```{r filter-expression}
+expr_filt <- expr[
+  rownames(expr) %in% gene_list,
+  ,
+  drop = FALSE
+]
+
+cat(
+  "Genes found in expression matrix:",
+  nrow(expr_filt),
+  "\n"
+)
+```
+
+# 7. Transpose the Expression Matrix
+
+The original expression matrix contains:
+
+- Genes as rows.
+- Samples as columns.
+
+For machine learning analysis, the data are transposed so that:
+
+- Samples are rows.
+- Genes are columns.
+
+```{r transpose-expression}
+expr_t <- as.data.frame(
+  t(expr_filt)
+)
+```
+
+# 8. Prepare Sample IDs
+
+The sample names are standardized before merging the expression matrix with the metadata.
+
+```{r prepare-sample-id}
+expr_t$SampleID <- gsub(
+  "_.*",
+  "",
+  rownames(expr_t)
+)
+```
+
+# 9. Merge Expression Data and Metadata
+
+The expression matrix is merged with the metadata using the sample identifier.
+
+```{r merge-data}
+merged <- merge(
+  meta,
+  expr_t,
+  by = "SampleID"
+)
+```
+
+# 10. Select Tumor and Adjacent Non-Tumor Samples
+
+Only tumor and adjacent non-tumor samples are retained for classification.
+
+```{r subset-samples}
+merged <- merged[
+  merged$tissue %in%
+    c("Tumor", "adjacent_non_tumor"),
+  ,
+  drop = FALSE
+]
+
+merged$tissue <- factor(
+  merged$tissue,
+  levels = c(
+    "adjacent_non_tumor",
+    "Tumor"
+  )
+)
+
+table(merged$tissue)
+```
+
+The outcome classes are:
+
+| Tissue Type | Class |
+|---|---|
+| Adjacent non-tumor | Reference class |
+| Tumor | Tumor class |
+
+# 11. Prepare the Machine Learning Dataset
+
+Before selecting the predictor genes, the overlap between the requested gene list and the genes available in the merged dataset is checked.
+
+```{r prepare-ml-data}
+valid_genes <- intersect(
+  gene_list,
+  colnames(merged)
+)
+
+cat(
+  "Genes requested:",
+  length(gene_list),
+  "\n"
+)
+
+cat(
+  "Genes available:",
+  length(valid_genes),
+  "\n"
+)
+
+ml_data <- merged[
+  ,
+  c("tissue", valid_genes),
+  drop = FALSE
+]
+```
+
+Using `valid_genes` ensures that the analysis will not fail if one or more genes from the original gene list are absent from the expression matrix.
+
+# 12. Create Predictor and Outcome Matrices
+
+The predictor matrix contains the gene expression values, while the outcome variable contains the tissue classification.
+
+```{r predictor-outcome}
+x <- data.matrix(
+  ml_data[, valid_genes, drop = FALSE]
+)
+
+y <- ml_data$tissue
+```
+
+# 13. Remove Samples with Missing Values
+
+Samples containing missing values are removed before Random Forest model construction.
+
+```{r remove-missing}
+idx <- complete.cases(x)
+
+x <- x[
+  idx,
+  ,
+  drop = FALSE
+]
+
+y <- y[idx]
+
+cat(
+  "Samples:",
+  nrow(x),
+  "\n"
+)
+
+cat(
+  "Genes:",
+  ncol(x),
+  "\n"
+)
+```
+
+# 14. Random Forest Model Construction
+
+A Random Forest classifier is constructed using 2,000 decision trees.
+
+```{r random-forest-model}
+rf_model <- randomForest(
+  x = x,
+  y = y,
+  ntree = 2000,
+  importance = TRUE
+)
+```
+
+The `importance = TRUE` option calculates feature importance measures for each gene.
+
+# 15. Evaluate Out-of-Bag Error
+
+Random Forest uses samples not included in each bootstrap sample as **out-of-bag (OOB) samples** to estimate prediction error.
+
+```{r oob-error}
+cat(
+  "OOB Error:",
+  rf_model$err.rate[
+    2000,
+    "OOB"
+  ],
+  "\n"
+)
+```
+
+A lower OOB error indicates better classification performance.
+
+
+# 16. Error Rate Versus Number of Trees
+
+The following plot shows how the classification error changes as additional trees are added to the Random Forest model.
+
+```{r error-vs-trees, fig.width=8, fig.height=6}
+plot(
+  rf_model,
+  main = "Error Rate vs Number of Trees",
+  lwd = 2,
+  col = c(
+    "black",
+    "red",
+    "green"
+  )
+)
+
+legend(
+  "topright",
+  legend = c(
+    "Overall OOB",
+    "Adjacent",
+    "Tumor"
+  ),
+  col = c(
+    "black",
+    "red",
+    "green"
+  ),
+  lwd = 2,
+  bty = "n"
+)
+```
+
+The plot displays:
+
+- Overall out-of-bag error.
+- Classification error for adjacent non-tumor samples.
+- Classification error for tumor samples.
+
+# 17. Save Error Rate Plot
+
+```{r save-error-vs-trees}
+png(
+  "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/figures/RF_error_vs_trees.png",
+  width = 900,
+  height = 700
+)
+
+plot(
+  rf_model,
+  main = "Error Rate vs Number of Trees",
+  lwd = 2,
+  col = c(
+    "black",
+    "red",
+    "green"
+  )
+)
+
+legend(
+  "topright",
+  legend = c(
+    "Overall OOB",
+    "Adjacent",
+    "Tumor"
+  ),
+  col = c(
+    "black",
+    "red",
+    "green"
+  ),
+  lwd = 2,
+  bty = "n"
+)
+
+dev.off()
+```
+
+# 18. Calculate Feature Importance
+
+Feature importance is calculated using the **Mean Decrease in Gini** measure.
+
+```{r feature-importance}
+imp <- importance(
+  rf_model,
+  type = 2
+)
+
+imp_df <- data.frame(
+  Gene = rownames(imp),
+  Importance = imp[, 1]
+)
+```
+
+The Mean Decrease in Gini indicates the contribution of each gene to reducing node impurity across the Random Forest.
+
+Genes with larger values are considered more important for classification.
+
+# 19. Rank Genes by Importance
+
+The genes are sorted in descending order based on their Gini importance.
+
+```{r rank-genes}
+imp_df <- imp_df[
+  order(-imp_df$Importance),
+  ,
+  drop = FALSE
+]
+
+head(imp_df)
+```
+
+# 20. Save the Complete Gene Importance Ranking
+
+```{r save-ranking}
+write.csv(
+  imp_df,
+  "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/results/RF_gene_importance_ranking.csv",
+  row.names = FALSE
+)
+```
+
+# 21. Select Genes with Importance Greater Than 1
+
+Genes with a Mean Decrease in Gini value greater than 1 are selected as candidate biomarkers.
+
+The Random Forest genes that has gini importance > 1 are exported for comparison with biomarkers identified by other machine learning methods.
+
+
+```{r select-important-genes}
+rf_selected <- imp_df[
+  imp_df$Importance > 1,
+  ,
+  drop = FALSE
+]
+
+cat(
+  "Genes with importance > 1:",
+  nrow(rf_selected),
+  "\n"
+)
+
+rf_selected
+```
+
+# 22. Save Selected Genes
+
+```{r save-selected-genes}
+write.csv(
+  rf_selected,
+  "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/results/RF_genes_importance_gt1.csv",
+  row.names = FALSE
+)
+```
+
+# 23. Visualize the Top 30 Genes
+
+The 30 genes with the highest Mean Decrease in Gini are selected for visualization.
+
+```{r top30}
+top_n <- min(
+  30,
+  nrow(imp_df)
+)
+
+top30 <- imp_df[
+  1:top_n,
+  ,
+  drop = FALSE
+]
+
+p <- ggplot(
+  top30,
+  aes(
+    x = Importance,
+    y = reorder(Gene, Importance)
+  )
+) +
+  geom_point(size = 3) +
+  theme_bw() +
+  labs(
+    title = "Top 30 Genes by Random Forest",
+    x = "Mean Decrease in Gini",
+    y = "Feature"
+  )
+
+p
+```
+
+# 24. Save the Top 30 Feature Importance Plot
+
+```{r save-top30-plot}
+ggsave(
+  "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/figures/RF_top30_gini.png",
+  p,
+  width = 6,
+  height = 8,
+  dpi = 300
+)
+```
+
+# 25. view the Top 30 Genes
+
+
+```{r export-top30}
+top_rf_genes <- imp_df$Gene[
+  1:top_n
+]
+
+
+top_rf_genes
+```
+
+# 26. Final Summary
+
+```{r final-summary}
+cat(
+  "Input genes:",
+  length(gene_list),
+  "\n"
+)
+
+cat(
+  "Genes used for Random Forest:",
+  ncol(x),
+  "\n"
+)
+
+cat(
+  "Samples used:",
+  nrow(x),
+  "\n"
+)
+
+cat(
+  "Number of trees:",
+  2000,
+  "\n"
+)
+
+cat(
+  "Final OOB Error:",
+  rf_model$err.rate[
+    rf_model$ntree,
+    "OOB"
+  ],
+  "\n"
+)
+
+cat(
+  "Genes with importance > 1:",
+  nrow(rf_selected),
+  "\n"
+)
+
+cat(
+  "Top genes exported for intersection:",
+  length(top_rf_genes),
+  "\n"
+)
+```
+
+# 28. Selected Candidate Biomarkers
+
+```{r selected-biomarkers}
+rf_selected
+```
+
+# 29. Conclusion
+
+Random Forest classification was performed using genes identified from the overlap between differentially expressed genes and WGCNA hub genes. The model was trained to distinguish pancreatic tumor samples from adjacent non-tumor samples using 2,000 decision trees.
+
+Feature importance was evaluated using the Mean Decrease in Gini measure. Genes were ranked according to their importance, and genes with an importance value greater than 1 were retained as candidate biomarkers. these candidate biomarker genes were exported for comparison with biomarkers identified using other machine learning approaches.

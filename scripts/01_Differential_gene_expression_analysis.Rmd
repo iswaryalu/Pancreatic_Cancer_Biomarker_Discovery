@@ -1,0 +1,251 @@
+---
+title: "Differential gene expression of pancreatic cancer for the dataset GSE183795"
+author: "Iswarya L U"
+date: "5-11-2025"
+output: html_document
+---
+##Necessary packages
+```{r}
+library(limma)
+library(tidyverse)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(enrichplot)
+library(ggplot2)
+library(pheatmap)
+library(scales)
+library(ggrepel)
+
+```
+
+**rm(list = ls())** clears the R environment to start with a clean workspace.
+**limma** is used for differential gene expression analysis.
+**tidyverse** is used for data manipulation.
+**clusterProfiler** is used for pathway and enrichment analysis.
+**org.Hs.eg.db** provides human gene annotation.
+**enrichplot and pheatmap** are used for enrichment and heatmap visualization.
+**ggplot2** is used for plotting
+
+## 1. Dataset and Study Design
+
+This analysis uses the publicly available GEO dataset GSE183795, 
+containing gene-expression profiles from pancreatic ductal 
+adenocarcinoma (PDAC) tumor and adjacent non-tumor tissues.
+
+The dataset contains 139 tumor samples, 102 adjacent non-tumor 
+samples, and 3 normal pancreas samples from donors.
+
+For this analysis, only tumor and adjacent non-tumor samples were 
+included. The three normal donor samples were excluded because the 
+objective of this analysis is to identify transcriptional differences 
+between PDAC tumor and adjacent non-tumor tissues.
+
+The final analysis therefore includes 241 samples:
+139 tumor and 102 adjacent non-tumor samples.
+
+##2. Load Processed Data
+```{r}
+expr <- read.csv("C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/data/normalized_expression_matrix.csv",row.names = 1, check.names = FALSE)
+
+meta <- read.csv("C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/data/meta_clean.csv",row.names = 1)
+
+```
+
+**read.csv()** imports the preprocessed expression matrix and metadata.
+**row.names = 1** uses the first column as row names.
+**check.names = FALSE** preserves the original sample names.## Including Plots
+
+##3. Select Tumor and Adjacent Non-Tumor Samples
+
+```{r}
+colnames(expr) <- gsub("_.*", "", colnames(expr))
+
+meta_dge <- meta %>%
+  filter(tissue %in% c("Tumor", "adjacent_non_tumor"))
+
+expr_dge <- expr[, rownames(meta_dge)]
+
+```
+
+**gsub()** standardizes the expression matrix sample names.
+**filter()** retains only tumor and adjacent non-tumor samples.
+The expression matrix is then subsetted to match the selected metadata samples.
+
+The three normal donor samples are excluded because this analysis focuses on tumor vs adjacent non-tumor tissue.
+
+##4. Define Experimental Groups
+```{r}
+group <- factor(
+  meta_dge$tissue,
+  levels = c("adjacent_non_tumor", "Tumor")
+)
+
+design <- model.matrix(~0 + group)
+colnames(design) <- levels(group)
+```
+**factor()**defines the two experimental groups.
+**model.matrix()** creates the design matrix required for the limma analysis.
+
+Adjacent non-tumor tissue is used as the reference group.
+
+##5.Differential Gene Expression Analysis
+
+```{r}
+fit <- lmFit(expr_dge, design)
+
+contrast.matrix <- makeContrasts(
+  Tumor - adjacent_non_tumor,
+  levels = design
+)
+
+fit2 <- contrasts.fit(fit, contrast.matrix)
+fit2 <- eBayes(fit2)
+```
+**lmFit()** fits a linear model for each gene.
+**makeContrasts()** defines the Tumor vs Adjacent Non-Tumor comparison.
+**contrasts.fit()** applies this comparison to the fitted model.
+**eBayes()** performs empirical Bayes moderation to improve variance estimation.
+
+##6.Extract DEG Results
+
+```{r}
+deg_results <- topTable(
+  fit2,
+  number = Inf,
+  adjust.method = "BH"
+) %>%
+  rownames_to_column("Gene")
+```
+**topTable()** extracts differential expression statistics for all genes.
+number = Inf retains all genes.
+BH applies Benjamini-Hochberg multiple-testing correction.
+**rownames_to_column()** converts gene IDs into a Gene column.
+
+##7. Classify DEGs
+
+```{r}
+deg_results <- deg_results %>%
+  mutate(
+    status = case_when(
+      adj.P.Val < 0.05 & logFC > 1 ~ "Upregulated",
+      adj.P.Val < 0.05 & logFC < -1 ~ "Downregulated",
+      TRUE ~ "Not Significant"
+    )
+)
+write.csv(deg_results,"C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/results/csv_of_differentially_expressed_genes.csv", row.names = FALSE)
+```
+
+Genes are classified using:
+
+**Adjusted p-value < 0.05**
+**log2FC > 1 → Upregulated**
+**log2FC < -1 → Downregulated**
+**Remaining genes → Not Significant**
+
+##8.Volcano Plot
+
+```{r}
+volcano_plot <- ggplot(deg_results, 
+                       aes(x = logFC, 
+                           y = -log10(adj.P.Val), 
+                           color = status)) +
+  geom_point(alpha = 0.7, size = 1.8) +
+  scale_color_manual(values = c(
+    "Upregulated" = "red",
+    "Downregulated" = "blue",
+    "Not Significant" = "grey"
+  )) +
+  geom_vline(xintercept = c(-1, 1), linetype = "dashed") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
+  theme_bw(base_size = 12) +
+  labs(title = "Volcano Plot: Tumor vs Adjacent Non-Tumor",
+       x = "Log2 Fold Change",
+       y = "-Log10 Adjusted P-value")
+
+volcano_plot
+
+ggsave(
+  filename = "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/figures/deg/DEG_Volcano_Plot.png",
+  plot = volcano_plot,
+  width = 12,
+  height = 9,
+  units = "in",
+  dpi = 300
+)
+
+```
+
+**ggplot()** initializes the plot.
+**aes()** maps log2 fold change to the x-axis and adjusted p-value to the y-axis.
+**geom_point()** displays individual genes.
+**geom_vline() and geom_hline()** show the DEG thresholds.
+
+##9.Top 30 DEG heatmap
+
+```{r}
+top30 <- deg_results %>%
+  arrange(adj.P.Val) %>%
+  filter(status != "Not Significant") %>%
+  head(30)
+
+top30_genes <- top30$Gene
+expr_top30 <- expr_dge[top30_genes, ]
+expr_scaled <- t(scale(t(expr_top30)))
+
+annotation_col <- data.frame(
+  Tissue = meta_dge$tissue
+)
+
+rownames(annotation_col) <- rownames(meta_dge)
+
+ann_colors <- list(
+  Tissue = c(
+    Tumor = "firebrick3",
+    adjacent_non_tumor = "steelblue3"
+  )
+)
+
+pheatmap(
+  expr_scaled,
+  annotation_col = annotation_col,
+  show_colnames = FALSE,
+  fontsize_row = 8,
+  clustering_method = "complete"
+)
+
+pheatmap(
+  expr_scaled,
+  annotation_col = annotation_col,
+  annotation_colors = ann_colors,
+  cluster_rows = TRUE,
+  cluster_cols = TRUE,
+  show_rownames = TRUE,
+  show_colnames = FALSE,
+  color = colorRampPalette(c("navy", "white", "firebrick3"))(50),
+  fontsize_row = 8,
+  main = "Top 30 DEGs: Tumor (Red) vs Adjacent Non-Tumor (Blue)"
+)
+
+# Record the displayed heatmap
+heatmap_recorded <- recordPlot()
+# ============================================================
+# SAVE HEATMAP
+# ============================================================
+
+figure_dir <- "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/figures/deg"
+
+if (!dir.exists(figure_dir)) {
+  dir.create(figure_dir, recursive = TRUE)
+}
+
+png(
+  filename = file.path(figure_dir, "DEG_Heatmap.png"),
+  width = 4200,
+  height = 3600,
+  res = 300
+)
+
+replayPlot(heatmap_recorded)
+
+dev.off()
+```

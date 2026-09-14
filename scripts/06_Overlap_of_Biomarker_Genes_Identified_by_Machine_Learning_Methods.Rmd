@@ -1,0 +1,283 @@
+---
+title: "Overlap of Biomarker Genes Identified by Machine Learning Methods"
+author: "Iswarya L U"
+date: "2026-02-22"
+output: html_document
+---
+
+# 1. Introduction
+
+This analysis compares candidate biomarker genes identified using three different machine learning approaches:
+
+- Support Vector Machine–Recursive Feature Elimination (SVM-RFE)
+- Random Forest
+- LASSO regression
+
+The objective is to identify genes that are consistently selected across multiple machine learning methods.
+
+The analysis includes:
+
+1. Loading the biomarker gene lists.
+2. Extracting gene names from each result.
+3. Constructing a Venn diagram to visualize overlap.
+4. Identifying genes common to all three machine learning methods.
+5. Saving the common biomarker genes for downstream analysis.
+
+# 2. Install and Load Required Packages
+
+```{r setup}
+if (!require(VennDiagram)) {
+  install.packages("VennDiagram")
+}
+
+if (!require(ggvenn)) {
+  install.packages("ggvenn")
+}
+
+library(VennDiagram)
+library(ggvenn)
+
+set.seed(123)
+```
+
+The packages are used for visualization of overlapping gene sets.
+
+- `VennDiagram` creates traditional Venn diagrams.
+- `ggvenn` creates a modern Venn diagram using the `ggplot2` visualization framework.
+
+# 3. Load Machine Learning Gene Lists
+
+The biomarker genes identified by SVM-RFE, Random Forest, and LASSO are loaded.
+
+```{r load-gene-lists}
+svm <- read.csv(
+  "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/results/SVM_RFE_biomarker_genes.csv",
+  stringsAsFactors = FALSE
+)
+
+rf <- read.csv(
+  "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/results/RF_genes_importance_gt1.csv",
+  stringsAsFactors = FALSE
+)
+
+lasso <- read.csv(
+  "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/results/LASSO_selected_biomarkers.csv",
+  stringsAsFactors = FALSE
+)
+```
+
+The three files contain the candidate biomarkers identified by the respective machine learning approaches.
+
+# 4. Extract Gene Names
+
+The gene names are extracted from the appropriate columns of each result file.
+
+```{r extract-gene-names}
+svm_genes <- unique(svm$Gene)
+
+rf_genes <- unique(rf$Gene)
+
+lasso_genes <- unique(lasso$x)
+```
+
+Duplicate gene names are removed using `unique()`.
+
+# 5. Summarize the Number of Genes
+
+```{r gene-counts}
+cat(
+  "SVM-RFE genes:",
+  length(svm_genes),
+  "\n"
+)
+
+cat(
+  "Random Forest genes:",
+  length(rf_genes),
+  "\n"
+)
+
+cat(
+  "LASSO genes:",
+  length(lasso_genes),
+  "\n"
+)
+```
+
+# 6. Create Gene Sets
+
+The three gene lists are combined into a named list for Venn diagram analysis.
+
+```{r gene-sets}
+gene_sets <- list(
+  SVM_RFE = svm_genes,
+  Random_Forest = rf_genes,
+  LASSO = lasso_genes
+)
+
+gene_sets
+```
+
+# 7. Classic Venn Diagram
+
+A traditional Venn diagram is generated to visualize the overlap between the three machine learning approaches.
+
+```{r classic-venn}
+venn.diagram(
+  x = gene_sets,
+  filename = "Biomarker_VennDiagram.png",
+  fill = c(
+    "red",
+    "blue",
+    "green"
+  ),
+  alpha = 0.5,
+  cex = 1.5,
+  cat.cex = 1.5,
+  cat.pos = 0,
+  main = "Overlap of Biomarker Genes from ML Methods"
+)
+```
+
+The diagram shows:
+
+- Genes uniquely identified by each method.
+- Pairwise overlaps between methods.
+- Genes shared by all three machine learning methods.
+
+# 8. Publication-Style Venn Diagram
+
+A modern Venn diagram is generated using `ggvenn`.
+
+```{r modern-venn}
+venn_plot <- ggvenn(
+  gene_sets,
+  fill_color = c(
+    "red",
+    "blue",
+    "green"
+  ),
+  stroke_size = 0.5,
+  set_name_size = 6
+)
+
+venn_plot
+```
+
+# 9. Save the Venn Diagram
+
+```{r save-venn}
+ggsave(
+  "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/figures/Biomarker_VennDiagram_all_three_ml.png",
+  venn_plot,
+  width = 6,
+  height = 6,
+  dpi = 300
+)
+```
+
+The figure is saved at 300 DPI, making it suitable for use in reports or presentations.
+
+# 10. Identify Biomarkers Common to All Three Methods
+
+The `Reduce(intersect, ...)` operation identifies genes that occur in all three gene sets.
+
+```{r common-genes}
+common_all <- Reduce(
+  intersect,
+  gene_sets
+)
+
+cat(
+  "Number of common biomarkers:",
+  length(common_all),
+  "\n"
+)
+
+print(common_all)
+```
+
+These genes represent biomarkers that were independently selected by:
+
+- SVM-RFE
+- Random Forest
+- LASSO
+
+Therefore, they may represent more robust candidate biomarkers than genes selected by only one machine learning method.
+
+# 11. Save Common Biomarker Genes
+
+```{r save-common-genes}
+write.csv(
+  data.frame(Gene = common_all),
+  "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/results/Common_Biomarker_Genes_All_3_ml.csv",
+  row.names = FALSE
+)
+```
+
+# 12. Final Summary
+
+```{r final-summary}
+cat(
+  "====================================\n"
+)
+
+cat(
+  "MACHINE LEARNING BIOMARKER OVERLAP\n"
+)
+
+cat(
+  "====================================\n"
+)
+
+cat(
+  "SVM-RFE genes:",
+  length(svm_genes),
+  "\n"
+)
+
+cat(
+  "Random Forest genes:",
+  length(rf_genes),
+  "\n"
+)
+
+cat(
+  "LASSO genes:",
+  length(lasso_genes),
+  "\n"
+)
+
+cat(
+  "Common genes across all three:",
+  length(common_all),
+  "\n"
+)
+
+cat(
+  "====================================\n"
+)
+```
+
+# 13. Common Candidate Biomarkers
+
+```{r display-common}
+data.frame(
+  Gene = common_all
+)
+```
+
+# 14. Conclusion
+
+Candidate biomarkers identified using SVM-RFE, Random Forest, and LASSO were compared to determine genes consistently selected across multiple machine learning approaches.
+
+The intersection of the three gene sets was used to identify **common candidate biomarkers**. These genes represent candidates supported by multiple independent feature-selection strategies and can be subjected to further validation and functional analysis.
+
+Potential downstream analyses include:
+
+- Gene Ontology (GO) enrichment analysis
+- KEGG pathway enrichment analysis
+- Protein-protein interaction (PPI) network analysis
+- Expression validation
+- ROC curve analysis
+- Survival analysis

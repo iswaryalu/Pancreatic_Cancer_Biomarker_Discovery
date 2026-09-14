@@ -1,0 +1,156 @@
+---
+title: "Comparison of WGCNA Hub Genes and Differentially Expressed Genes"
+author: "Iswarya L U"
+date: "15-11-2025"
+output: html_document
+---
+
+
+#necessary packages
+```{r}
+# ============================================================
+# Venn Diagram: WGCNA Hub Genes vs DEGs
+# ============================================================
+
+library(tidyverse)
+library(VennDiagram)
+library(grid)
+
+```
+
+## Introduction
+
+
+Differential expression analysis identifies genes whose expression differs significantly between tumor and adjacent non-tumor tissues.
+
+WGCNA identifies groups of co-expressed genes associated with tumor status. Hub genes are highly connected genes within significant tumor-associated modules.
+
+To identify potential candidate genes supported by both analyses, the WGCNA hub genes are compared with the significant differentially expressed genes.
+
+The overlapping genes represent genes that are:
+
+Differentially expressed between tumor and adjacent non-tumor tissues.
+Highly connected within tumor-associated co-expression modules.
+
+```{r}
+# -----------------------
+# Load data
+# -----------------------
+hub <- read.csv("C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/results/wgcna/WGCNA_hub_genes.csv",stringsAsFactors = FALSE)
+deg <- read.csv("C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/results/differential_expression/csv_of_differentially_expressed_genes.csv",stringsAsFactors = FALSE)
+
+
+```
+
+The WGCNA results contain the identified hub genes.
+
+The differential expression results contain all analyzed genes, including upregulated, downregulated, and non-significant genes.
+
+
+## Extract WGCNA Hub Genes and Significant DEGs
+
+```{r}
+hub_genes <- hub %>%pull(Gene) %>%unique()
+
+deg_genes <- deg %>%filter(status != "Not Significant") %>%pull(Gene) %>%  unique()
+
+#Check Gene Identifiers
+
+#Before calculating the overlap, it is important to verify that both datasets use the same type of gene identifier.
+
+head(hub_genes)
+
+head(deg_genes)
+
+```
+
+**pull(Gene)** extracts the gene identifiers from each dataset.
+
+**unique()** removes duplicate gene identifiers.
+
+For the DEG results, only genes classified as either **Upregulated or Downregulated** are retained.
+
+Genes classified as **Not Significant** are excluded.
+
+##Identify Overlapping Genes
+
+```{r}
+hub_deg_intersect <- intersect(hub_genes, deg_genes)
+
+cat("Hub genes:", length(hub_genes), "\n")
+cat("DEGs:", length(deg_genes), "\n")
+cat("Overlap genes:", length(hub_deg_intersect), "\n")
+
+```
+The intersect() function identifies genes present in both the WGCNA hub gene list and the significant DEG list.
+
+These overlapping genes represent potential candidate genes supported by both differential expression analysis and co-expression network analysis.
+
+##Save Overlapping Genes
+
+```{r}
+overlap_genes <- data.frame(Gene = hub_deg_intersect)
+
+write.csv(overlap_genes,"C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/Hub_DEG_overlap_genes.csv",row.names = FALSE)
+```
+
+##Venn Diagram of WGCNA Hub Genes and Significant DEGs
+
+The Venn diagram provides a visual representation of the relationship between WGCNA hub genes and significant differentially expressed genes.
+
+```{r,fig.width=12, fig.height=10, out.width='65%', fig.align='center'}
+venn.plot <- venn.diagram(x = list(DEGs = deg_genes,WGCNA_Hub_Genes = hub_genes),filename = NULL,
+fill = c("red","green"),
+alpha = 0.5,
+cex = 2,
+cat.cex = 1.5,
+margin = 0.1,
+main = "Overlap of Significant DEGs and WGCNA Hub Genes"
+)
+
+grid.newpage()
+
+grid.draw(venn.plot)
+```
+
+
+
+#SAVE THE VENN DIAGRAM
+
+```{r}
+png(
+  
+  "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/DEG_and_WGCNA_analysis/deg_wgcna_venn/WGCNA_DEG_Venn.png",width = 1200,height = 1000,res = 150)
+
+grid.newpage()
+
+grid.draw(venn.plot)
+
+dev.off()
+```
+
+##view and save the integartion summary
+
+```{r}
+integration_summary <- data.frame(Category = c("WGCNA Hub Genes", "Significant DEGs","Overlapping Genes"),Number_of_Genes = c(length(hub_genes),length(deg_genes),length(hub_deg_intersect)))
+
+integration_summary
+#save the integration_summary
+
+write.csv(integration_summary,"C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/DEG_and_WGCNA_analysis/deg_wgcna_venn/DEG_WGCNA_integration_summary.csv",row.names = FALSE
+)
+
+```
+
+
+##Interpretation
+
+The overlapping genes are particularly interesting because they satisfy two different criteria:
+
+Significant Differential Expression
+              +
+High Connectivity in a Tumor-Associated WGCNA Module
+              ↓
+Potential Candidate Genes
+
+This makes the DEG–WGCNA intersection a reasonable set of candidate genes for your subsequent biomarker discovery analyses.

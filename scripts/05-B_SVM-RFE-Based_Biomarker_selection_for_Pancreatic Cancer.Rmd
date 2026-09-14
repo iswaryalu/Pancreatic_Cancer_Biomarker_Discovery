@@ -1,0 +1,710 @@
+---
+title: "SVM-RFE-Based Biomarker Selection for Pancreatic Cancer"
+author: "Iswarya L U"
+date: "2026-02-22"
+output: html_document
+---
+
+```{r}
+rm(list = ls())
+
+options(stringsAsFactors = FALSE)
+
+set.seed(123)
+
+```
+
+A random seed is set to improve the reproducibility of the analysis.
+
+
+## Introduction
+This analysis performs **Support Vector Machine–Recursive Feature Elimination (SVM-RFE)** to identify a subset of candidate biomarkers capable of distinguishing pancreatic tumor samples from adjacent non-tumor samples.
+
+The input genes consist of the overlap between:
+
+- Differentially expressed genes (DEGs)
+- WGCNA hub genes
+
+SVM-RFE is used to evaluate different numbers of features and identify an optimal subset of genes for classification.
+
+The workflow includes:
+
+1. Loading the normalized gene expression matrix.
+2. Loading the overlapping DEG and WGCNA hub gene list.
+3. Selecting tumor and adjacent non-tumor samples.
+4. Preparing and scaling the machine learning dataset.
+5. Performing SVM-based recursive feature elimination.
+6. Evaluating classification accuracy and cross-validation error.
+7. Identifying the optimal number of features.
+8. Extracting the selected biomarker genes.
+
+
+
+# Load Required Libraries
+
+```{r libraries}
+library(caret)
+library(e1071)
+library(ggplot2)
+library(dplyr)
+library(gridExtra)
+library(doParallel)
+```
+
+The packages are used for:
+
+- `caret`: machine learning workflow and recursive feature elimination.
+- `e1071`: support vector machine implementation.
+- `ggplot2`: visualization.
+- `dplyr`: data manipulation.
+- `gridExtra`: arranging graphical objects if needed.
+- `doParallel`: parallel computing support.
+
+# Configure Parallel Processing
+
+```{r parallel-processing}
+stopImplicitCluster()
+
+registerDoSEQ()
+```
+
+This ensures that the analysis runs sequentially rather than using an implicit parallel backend.
+
+# Load Data
+
+```{r load-data}
+expr <- read.csv(
+  "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/data/normalized_expression_matrix.csv",
+  row.names = 1,
+  check.names = FALSE
+)
+
+genes <- read.delim(
+  "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/results/integration of deg and wgcna/Hub_DEG_overlap_genes.csv",
+  header = TRUE,
+  stringsAsFactors = FALSE,
+  sep = ","
+)
+
+meta <- read.csv(
+  "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/data/meta_clean.csv"
+)
+```
+
+The analysis uses:
+
+- A normalized gene expression matrix.
+- A list of overlapping DEG and WGCNA hub genes.
+- Sample metadata containing tissue information.
+
+# Prepare the Gene List
+
+The gene list is extracted and duplicate genes are removed.
+
+```{r gene-list}
+gene_list <- unique(genes$Gene)
+
+cat(
+  "Total genes:",
+  length(gene_list),
+  "\n"
+)
+
+head(gene_list)
+```
+
+# Filter the Expression Matrix
+
+Only genes present in the overlap gene list are retained.
+
+```{r filter-genes}
+expr_filt <- expr[
+  rownames(expr) %in% gene_list,
+  ,
+  drop = FALSE
+]
+
+cat(
+  "Genes present in expression matrix:",
+  nrow(expr_filt),
+  "\n"
+)
+```
+
+# Transpose the Expression Matrix
+
+The original expression matrix contains:
+
+- Genes as rows.
+- Samples as columns.
+
+Machine learning analysis requires:
+
+- Samples as rows.
+- Genes as columns.
+
+Therefore, the expression matrix is transposed.
+
+```{r transpose-expression}
+expr_t <- as.data.frame(
+  t(expr_filt)
+)
+```
+
+# Prepare Sample IDs
+
+Sample names are standardized to match the metadata.
+
+```{r sample-id}
+expr_t$SampleID <- gsub(
+  "_.*",
+  "",
+  rownames(expr_t)
+)
+```
+
+# Merge Expression Data and Metadata
+
+The gene expression data are merged with the sample metadata.
+
+```{r merge-data}
+merged <- merge(
+  meta,
+  expr_t,
+  by = "SampleID"
+)
+```
+
+# Select Tumor and Adjacent Non-Tumor Samples
+
+Only the two groups relevant to the classification analysis are retained.
+
+```{r subset-samples}
+merged <- merged[
+  merged$tissue %in%
+    c("Tumor", "adjacent_non_tumor"),
+  ,
+  drop = FALSE
+]
+
+merged$tissue <- factor(
+  merged$tissue
+)
+
+table(merged$tissue)
+```
+
+The classification task consists of:
+
+- Tumor
+- Adjacent non-tumor
+
+# Prepare the Machine Learning Dataset
+
+The expression values of the candidate genes are extracted.
+
+```{r ml-dataset}
+valid_genes <- intersect(
+  gene_list,
+  colnames(merged)
+)
+
+cat(
+  "Genes requested:",
+  length(gene_list),
+  "\n"
+)
+
+cat(
+  "Genes available:",
+  length(valid_genes),
+  "\n"
+)
+
+ml_data <- merged[
+  ,
+  c("tissue", valid_genes),
+  drop = FALSE
+]
+```
+
+Using `valid_genes` rather than the complete `gene_list` ensures that the analysis does not fail if a gene from the input list is absent from the expression matrix.
+
+# Prepare the Outcome Variable
+
+The tissue labels are converted into a factor.
+
+```{r outcome-variable}
+y <- factor(
+  ml_data$tissue
+)
+
+table(y)
+```
+
+The outcome variable contains two classes:
+
+- `Tumor`
+- `adjacent_non_tumor`
+
+# Prepare the Predictor Matrix
+
+The gene expression values are converted into a numeric data frame.
+
+```{r predictor-matrix}
+x <- as.data.frame(
+  apply(
+    ml_data[, valid_genes, drop = FALSE],
+    2,
+    as.numeric
+  )
+)
+```
+
+The predictor matrix is then standardized.
+
+```{r scale-data}
+x <- as.data.frame(
+  scale(x)
+)
+```
+
+# Remove Missing Values
+
+Samples containing missing values are removed before machine learning analysis.
+
+```{r remove-missing}
+idx <- complete.cases(x)
+
+x <- x[
+  idx,
+  ,
+  drop = FALSE
+]
+
+y <- y[idx]
+
+cat(
+  "Final samples:",
+  nrow(x),
+  "\n"
+)
+
+cat(
+  "Final genes:",
+  ncol(x),
+  "\n"
+)
+```
+
+# SVM Recursive Feature Elimination
+
+Recursive Feature Elimination (RFE) is performed using a Support Vector Machine with a radial basis function kernel.
+
+Five-fold cross-validation is used to evaluate feature subsets.
+
+```{r svm-rfe-control}
+ctrl <- rfeControl(
+  functions = caretFuncs,
+  method = "cv",
+  number = 5
+)
+```
+
+The number of features evaluated ranges from one gene to a maximum of 50 genes.
+
+```{r feature-sizes}
+sizes <- seq(
+  1,
+  min(50, ncol(x)),
+  by = 1
+)
+```
+
+# Run SVM-RFE
+
+```{r svm-rfe}
+svmProfile <- rfe(
+  x,
+  y,
+  sizes = sizes,
+  rfeControl = ctrl,
+  method = "svmRadial",
+  tuneLength = 5
+)
+```
+
+The SVM-RFE procedure evaluates different feature subset sizes and determines which subset provides the best classification performance.
+
+# Extract SVM-RFE Results
+
+The classification accuracy is extracted from the recursive feature elimination results.
+
+```{r extract-results}
+results <- svmProfile$results
+
+results$CV_Error <- 1 - results$Accuracy
+
+results
+```
+
+# Identify the Optimal Number of Features
+
+The optimal number of features is determined based on the maximum cross-validation accuracy.
+
+```{r optimal-features}
+optimal_gene_number <- results$Variables[
+  which.max(results$Accuracy)
+]
+
+cat(
+  "Optimal gene number =",
+  optimal_gene_number,
+  "\n"
+)
+```
+
+# Identify Optimal Accuracy and Error
+
+The feature subset with the highest accuracy and the subset with the lowest cross-validation error are identified.
+
+```{r optimal-accuracy-error}
+opt_acc_idx <- which.max(
+  results$Accuracy
+)
+
+opt_err_idx <- which.min(
+  results$CV_Error
+)
+
+opt_features_acc <- results$Variables[
+  opt_acc_idx
+]
+
+opt_features_err <- results$Variables[
+  opt_err_idx
+]
+
+opt_acc <- round(
+  results$Accuracy[opt_acc_idx],
+  3
+)
+
+opt_err <- round(
+  results$CV_Error[opt_err_idx],
+  4
+)
+
+cat(
+  "Optimal features based on accuracy =",
+  opt_features_acc,
+  "\n"
+)
+
+cat(
+  "Optimal features based on error =",
+  opt_features_err,
+  "\n"
+)
+
+cat(
+  "Maximum accuracy =",
+  opt_acc,
+  "\n"
+)
+
+cat(
+  "Minimum CV error =",
+  opt_err,
+  "\n"
+)
+```
+
+Since:
+
+\[
+\text{CV Error} = 1 - \text{Accuracy}
+\]
+
+the feature subset with maximum accuracy should correspond to the feature subset with minimum classification error.
+
+
+# SVM-RFE Accuracy Plot
+
+The following plot shows the classification accuracy obtained using different numbers of features.
+
+```{r accuracy-plot, fig.width=8, fig.height=6}
+par(mar = c(5, 5, 4, 2))
+
+acc_range <- range(
+  results$Accuracy
+)
+
+acc_pad <- diff(acc_range) * 0.08
+
+plot(
+  results$Variables,
+  results$Accuracy,
+  type = "l",
+  col = "#4C84C4",
+  lwd = 3,
+  ylim = c(
+    acc_range[1],
+    acc_range[2] + acc_pad
+  ),
+  xlab = "Number of Features",
+  ylab = "Accuracy",
+  main = "SVM-RFE Classification Accuracy"
+)
+
+points(
+  opt_features_acc,
+  opt_acc,
+  pch = 19
+)
+
+text(
+  opt_features_acc,
+  opt_acc + acc_pad * 0.5,
+  labels = paste0(
+    opt_features_acc,
+    " – ",
+    opt_acc
+  ),
+  col = "red",
+  cex = 1.3
+)
+```
+
+The highlighted point represents the number of features associated with the highest cross-validation accuracy.
+
+# Save Accuracy Plot
+
+```{r save-accuracy-plot}
+png(
+  "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/figures/SVM_RFE_Accuracy.png",
+  width = 1600,
+  height = 1200,
+  res = 200
+)
+
+par(mar = c(5, 5, 4, 2))
+
+plot(
+  results$Variables,
+  results$Accuracy,
+  type = "l",
+  col = "#4C84C4",
+  lwd = 3,
+  ylim = c(
+    acc_range[1],
+    acc_range[2] + acc_pad
+  ),
+  xlab = "Number of Features",
+  ylab = "Accuracy",
+  main = "SVM-RFE Classification Accuracy"
+)
+
+points(
+  opt_features_acc,
+  opt_acc,
+  pch = 19
+)
+
+text(
+  opt_features_acc,
+  opt_acc + acc_pad * 0.5,
+  labels = paste0(
+    opt_features_acc,
+    " – ",
+    opt_acc
+  ),
+  col = "red",
+  cex = 1.3
+)
+
+dev.off()
+```
+
+#  SVM-RFE Cross-Validation Error Plot
+
+The cross-validation error is calculated as:
+
+[CV\ Error = 1 - Accuracy]
+
+```{r error-plot, fig.width=8, fig.height=6}
+par(mar = c(5, 5, 4, 2))
+
+err_range <- range(
+  results$CV_Error
+)
+
+err_pad <- diff(err_range) * 0.08
+
+plot(
+  results$Variables,
+  results$CV_Error,
+  type = "l",
+  col = "#4C84C4",
+  lwd = 3,
+  ylim = c(
+    err_range[1] - err_pad,
+    err_range[2] + err_pad
+  ),
+  xlab = "Number of Features",
+  ylab = "5-Fold CV Error",
+  main = "SVM-RFE Cross-Validation Error"
+)
+
+points(
+  opt_features_err,
+  opt_err,
+  pch = 19
+)
+
+text(
+  opt_features_err,
+  opt_err - err_pad * 0.5,
+  labels = paste0(
+    opt_features_err,
+    " – ",
+    opt_err
+  ),
+  col = "red",
+  cex = 1.3
+)
+```
+
+# Save Error Plot
+
+```{r save-error-plot}
+png(
+  "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/figures/SVM_RFE_Error.png",
+  width = 1600,
+  height = 1200,
+  res = 200
+)
+
+par(mar = c(5, 5, 4, 2))
+
+plot(
+  results$Variables,
+  results$CV_Error,
+  type = "l",
+  col = "#4C84C4",
+  lwd = 3,
+  ylim = c(
+    err_range[1] - err_pad,
+    err_range[2] + err_pad
+  ),
+  xlab = "Number of Features",
+  ylab = "5-Fold CV Error",
+  main = "SVM-RFE Cross-Validation Error"
+)
+
+points(
+  opt_features_err,
+  opt_err,
+  pch = 19
+)
+
+text(
+  opt_features_err,
+  opt_err - err_pad * 0.5,
+  labels = paste0(
+    opt_features_err,
+    " – ",
+    opt_err
+  ),
+  col = "red",
+  cex = 1.3
+)
+
+dev.off()
+```
+
+#Extract Selected Biomarker Genes
+
+The optimal feature subset identified by SVM-RFE is extracted.
+
+```{r extract-biomarkers}
+svm_genes <- svmProfile$optVariables
+
+cat(
+  "Number of SVM-RFE selected biomarkers:",
+  length(svm_genes),
+  "\n"
+)
+
+svm_genes
+```
+
+#Save Selected Biomarker Genes
+
+```{r save-biomarkers}
+write.csv(
+  data.frame(Gene = svm_genes),
+  "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/results/SVM_RFE_biomarker_genes.csv",
+  row.names = FALSE
+)
+```
+
+# Final Summary
+
+```{r final-summary}
+cat(
+  "Input genes:",
+  length(gene_list),
+  "\n"
+)
+
+cat(
+  "Genes used for SVM-RFE:",
+  ncol(x),
+  "\n"
+)
+
+cat(
+  "Samples used:",
+  nrow(x),
+  "\n"
+)
+
+cat(
+  "Optimal number of features:",
+  optimal_gene_number,
+  "\n"
+)
+
+cat(
+  "Maximum CV accuracy:",
+  opt_acc,
+  "\n"
+)
+
+cat(
+  "Minimum CV error:",
+  opt_err,
+  "\n"
+)
+
+cat(
+  "Selected biomarker genes:",
+  length(svm_genes),
+  "\n"
+)
+```
+
+## Selected Biomarkers
+
+```{r selected-biomarkers}
+data.frame(
+  Gene = svm_genes
+)
+```
+
+# Conclusion
+
+SVM-based recursive feature elimination was used to identify an optimal subset of genes capable of distinguishing pancreatic tumor samples from adjacent non-tumor samples. Starting with genes identified through the overlap between differential expression analysis and WGCNA hub gene analysis, SVM-RFE iteratively evaluated different feature subset sizes using five-fold cross-validation.
+
+The final set of genes identified by `svmProfile$optVariables` represents the candidate biomarkers selected by the optimal SVM-RFE model.

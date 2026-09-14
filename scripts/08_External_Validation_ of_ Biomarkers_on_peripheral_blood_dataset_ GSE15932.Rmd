@@ -1,0 +1,1111 @@
+---
+
+title: "External Validation of Pancreatic Cancer Biomarkers Using peripheral blood transcriptomic dataset GSE15932"
+author: "Iswarya L U"
+date: "24-02-2026"
+output:
+html_document:
+toc: true
+toc_float: true
+theme: readable
+---------------
+
+# GSE15932 External Validation
+
+## 1. Introduction
+
+This analysis evaluates the diagnostic performance of a selected pancreatic cancer biomarker panel using the independent blood-based microarray dataset **GSE15932**.
+
+The selected biomarkers are:
+
+* **AHNAK2**
+* **TRIM29**
+* **SLC6A14**
+* **ITGB4**
+* **CTSE**
+
+The analysis includes:
+
+1. Loading normalized gene-expression data and metadata.
+2. Restricting the dataset to pancreatic cancer and healthy control samples.
+3. Extracting expression values for the selected biomarkers.
+4. Fitting a multi-gene logistic regression model.
+5. Generating predicted risk scores.
+6. Evaluating the multi-gene panel using ROC analysis.
+7. Calculating AUC and 95% confidence intervals.
+8. Evaluating each biomarker individually.
+9. Comparing single-gene and multi-gene ROC curves.
+10. Identifying the optimal classification threshold using the Youden index.
+11. Constructing a confusion matrix.
+12. Saving risk scores and ROC coordinates.
+
+---
+
+# 2. Dataset Information
+
+## GSE15932
+
+**GEO accession:** GSE15932
+
+**Title:** Blood biomarkers of pancreatic cancer associated diabetes identified by peripheral blood-based gene expression profiles
+
+**Organism:** *Homo sapiens*
+
+**Experiment type:** Expression profiling by array
+
+**Platform:** GPL570 – Affymetrix Human Genome U133 Plus 2.0 Array
+
+The original study included 32 peripheral blood samples:
+
+* 8 pancreatic cancer with diabetes
+* 8 pancreatic cancer without diabetes
+* 8 diabetes mellitus
+* 8 healthy controls
+
+For the present external validation analysis, only:
+
+* **Pancreatic cancer without diabetes (PC only)**
+* **Healthy controls**
+
+are retained.
+
+The pancreatic cancer-associated diabetes and diabetes-only groups are excluded from this analysis.
+
+---
+
+# 3. Load Required Libraries
+
+```{r setup, message=FALSE, warning=FALSE}
+
+rm(list = ls())
+graphics.off()
+
+set.seed(123)
+
+# Load libraries
+library(pROC)
+library(ggpubr)
+
+```
+
+A random seed is set to ensure reproducibility of analyses involving random resampling, such as bootstrap confidence intervals.
+
+---
+
+# 4. Define Final Biomarker Panel
+
+The final biomarker panel consists of five genes selected from the pancreatic cancer biomarker discovery analysis.
+
+```{r define-biomarkers}
+
+final_genes <- c(
+  "AHNAK2",
+  "TRIM29",
+  "SLC6A14",
+  "ITGB4",
+  "CTSE"
+)
+
+final_genes
+
+```
+
+---
+
+# 5. Define File Paths
+
+The normalized expression matrix and metadata are loaded from the project directory.
+
+```{r file-paths}
+
+expr_file <- "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/data/normalized_expression_matrix_GSE15932.csv"
+
+meta_file <- "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/data/metadata_GSE15932_clean.csv"
+
+figure_dir <- "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/figures"
+
+result_dir <- "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/results"
+
+single_gene_roc_dir <- file.path(
+  figure_dir,
+  "single_gene_ROC"
+)
+
+# Create output directories if they do not already exist
+
+dir.create(
+  figure_dir,
+  showWarnings = FALSE,
+  recursive = TRUE
+)
+
+dir.create(
+  result_dir,
+  showWarnings = FALSE,
+  recursive = TRUE
+)
+
+dir.create(
+  single_gene_roc_dir,
+  showWarnings = FALSE,
+  recursive = TRUE
+)
+
+```
+
+---
+
+# 6. Load Expression and Metadata
+
+```{r load-data}
+
+expr <- read.csv(
+  expr_file,
+  row.names = 1,
+  check.names = FALSE
+)
+
+meta <- read.csv(
+  meta_file,
+  stringsAsFactors = FALSE
+)
+
+```
+
+## Inspect Expression Data
+
+```{r inspect-expression}
+
+cat("Expression matrix dimensions:\n")
+
+print(dim(expr))
+
+cat("\nFirst few genes:\n")
+
+print(head(rownames(expr)))
+
+```
+
+## Inspect Metadata
+
+```{r inspect-metadata}
+
+cat("Metadata dimensions:\n")
+
+print(dim(meta))
+
+cat("\nOriginal group distribution:\n")
+
+print(table(meta$Group))
+
+```
+
+---
+
+# 7. Recode Study Groups
+
+The original metadata contains four groups.
+
+For this external validation analysis, only **PC only** and **Healthy** samples are retained.
+
+```{r recode-groups}
+
+meta$group <- NA
+
+meta$group[
+  meta$Group == "PC only"
+] <- "Tumor"
+
+meta$group[
+  meta$Group == "Healthy"
+] <- "Control"
+
+```
+
+---
+
+# 8. Subset Pancreatic Cancer and Healthy Controls
+
+Samples belonging to:
+
+* PC + Diabetes
+* Diabetes only
+
+are excluded.
+
+```{r subset-groups}
+
+meta <- meta[
+  !is.na(meta$group),
+]
+
+meta$group <- factor(
+  meta$group,
+  levels = c("Control", "Tumor")
+)
+
+cat("Filtered group distribution:\n")
+
+print(table(meta$group))
+
+```
+
+The resulting dataset therefore represents a binary classification problem:
+
+**Control vs Tumor**
+
+---
+
+# 9. Extract Biomarker Expression
+
+Only genes present in both the predefined biomarker panel and the expression matrix are retained.
+
+```{r extract-genes}
+
+common_genes <- intersect(
+  final_genes,
+  rownames(expr)
+)
+
+cat(
+  "Genes used in the analysis:\n"
+)
+
+print(common_genes)
+
+```
+
+Check whether any biomarker is missing:
+
+```{r check-missing-genes}
+
+missing_genes <- setdiff(
+  final_genes,
+  common_genes
+)
+
+cat("Missing genes:\n")
+
+print(missing_genes)
+
+```
+
+The expression matrix is transposed so that samples are represented as rows and genes as columns.
+
+```{r transpose-expression}
+
+expr_t <- as.data.frame(
+  t(expr[common_genes, ])
+)
+
+expr_t$SampleID <- rownames(expr_t)
+
+```
+
+---
+
+# 10. Clean Sample IDs and Merge Data
+
+Sample identifiers are cleaned before merging the metadata and expression matrix.
+
+```{r merge-data}
+
+meta$SampleID <- trimws(
+  as.character(meta$SampleID)
+)
+
+expr_t$SampleID <- trimws(
+  as.character(expr_t$SampleID)
+)
+
+df <- merge(
+  meta,
+  expr_t,
+  by = "SampleID"
+)
+
+df$group <- factor(
+  df$group,
+  levels = c("Control", "Tumor")
+)
+
+```
+
+## Final Dataset Size
+
+```{r final-dataset}
+
+cat(
+  "Final dataset size:",
+  nrow(df),
+  "samples\n"
+)
+
+cat("\nFinal group distribution:\n")
+
+print(table(df$group))
+
+```
+
+---
+
+# 11. Logistic Regression Model
+
+A multivariable logistic regression model is fitted using the selected biomarker genes.
+
+The model estimates the probability that a sample belongs to the **Tumor** group.
+
+```{r logistic-regression}
+
+glm_model <- glm(
+  group ~ .,
+  data = df[, c("group", common_genes)],
+  family = binomial(link = "logit")
+)
+
+```
+
+## Model Summary
+
+```{r model-summary}
+
+cat("\nLogistic regression model summary:\n\n")
+
+print(summary(glm_model))
+
+```
+
+---
+
+# 12. Generate Predicted Risk Scores
+
+Predicted probabilities are generated from the logistic regression model.
+
+```{r predicted-risk}
+
+pred <- predict(
+  glm_model,
+  type = "response"
+)
+
+```
+
+## Prediction Summary
+
+```{r prediction-summary}
+
+cat("\nPrediction summary:\n\n")
+
+print(summary(pred))
+
+```
+
+The predicted probability represents the estimated probability that each sample belongs to the tumor group.
+
+---
+
+# 13. Multi-Gene ROC Analysis
+
+The predicted risk scores from the logistic regression model are evaluated using receiver operating characteristic (ROC) analysis.
+
+```{r multi-gene-roc}
+
+roc_panel <- pROC::roc(
+  response = df$group,
+  predictor = pred
+)
+
+```
+
+---
+
+# 14. Multi-Gene AUC
+
+The area under the ROC curve (AUC) is calculated to evaluate the discriminatory performance of the multi-gene panel.
+
+```{r multi-gene-auc}
+
+cat("\nMulti-gene AUC:\n")
+
+print(
+  auc(roc_panel)
+)
+
+```
+
+An AUC closer to 1 indicates stronger discrimination between pancreatic cancer and healthy control samples.
+
+---
+
+# 15. DeLong 95% Confidence Interval
+
+The 95% confidence interval for the AUC is calculated using the DeLong method.
+
+```{r delong-ci}
+
+cat("\nDeLong 95% CI:\n")
+
+print(
+  ci.auc(roc_panel)
+)
+
+```
+
+---
+
+# 16. Bootstrap 95% Confidence Interval
+
+A bootstrap confidence interval is also calculated using 2000 resamples.
+
+```{r bootstrap-ci}
+
+cat("\nBootstrap 95% CI using 2000 resamples:\n")
+
+print(
+  ci.auc(
+    roc_panel,
+    method = "bootstrap",
+    boot.n = 2000
+  )
+)
+
+```
+
+---
+
+# 17. Single-Gene ROC Analysis
+
+Each biomarker is evaluated individually using ROC analysis.
+
+```{r single-gene-roc}
+
+single_auc <- data.frame(
+  Gene = character(),
+  AUC = numeric(),
+  stringsAsFactors = FALSE
+)
+
+for (gene in common_genes) {
+
+  roc_single <- roc(
+    df$group,
+    df[[gene]]
+  )
+
+  auc_val <- auc(
+    roc_single
+  )
+
+  single_auc <- rbind(
+    single_auc,
+    data.frame(
+      Gene = gene,
+      AUC = as.numeric(auc_val)
+    )
+  )
+
+  # Save individual ROC curve
+
+  png(
+    file.path(
+      single_gene_roc_dir,
+      paste0(gene, "_ROC.png")
+    ),
+    width = 900,
+    height = 750
+  )
+
+  plot(
+    roc_single,
+    col = "red",
+    lwd = 4,
+    main = paste(
+      gene,
+      "ROC"
+    ),
+    cex.main = 1.5,
+    print.auc = TRUE,
+    print.auc.cex = 1.4
+  )
+
+  text(
+    0.6,
+    0.2,
+    labels = paste(
+      "AUC =",
+      round(auc_val, 3)
+    ),
+    cex = 1.2
+  )
+
+  dev.off()
+
+}
+
+```
+
+---
+
+# 18. Rank Individual Biomarkers by AUC
+
+```{r rank-single-gene}
+
+single_auc <- single_auc[
+  order(
+    -single_auc$AUC
+  ),
+]
+
+print(single_auc)
+
+```
+
+---
+
+# 19. Save Single-Gene AUC Results
+
+```{r save-single-gene-auc}
+
+write.csv(
+  single_auc,
+  file.path(
+    result_dir,
+    "GSE15932_single_gene_AUC.csv"
+  ),
+  row.names = FALSE
+)
+
+```
+
+---
+
+# 20. Plot Multi-Gene ROC Curve
+
+The multi-gene logistic regression ROC curve is plotted with an enlarged canvas for better visualization.
+
+```{r multi-gene-roc-plot, fig.width=10, fig.height=8}
+
+png(
+  file.path(
+    figure_dir,
+    "GSE15932_multi_gene_ROC.png"
+  ),
+  width = 1200,
+  height = 1000
+)
+
+plot(
+  roc_panel,
+  col = "blue",
+  lwd = 5,
+  main = "GSE15932 Multi-Gene Logistic ROC",
+  cex.main = 1.5,
+  print.auc = TRUE,
+  print.auc.cex = 1.5,
+  print.auc.y = 0.25
+)
+
+# Diagonal reference line
+
+abline(
+  a = 0,
+  b = 1,
+  lty = 2,
+  col = "gray"
+)
+
+# Calculate DeLong confidence interval
+
+ci_val <- ci.auc(
+  roc_panel
+)
+
+text(
+  0.6,
+  0.1,
+  labels = paste(
+    "95% CI:",
+    round(ci_val[1], 3),
+    "-",
+    round(ci_val[3], 3)
+  ),
+  cex = 1.2
+)
+
+dev.off()
+
+```
+
+---
+
+# 21. Display Multi-Gene ROC Curve
+
+```{r display-multi-gene-roc}
+
+plot(
+  roc_panel,
+  col = "blue",
+  lwd = 4,
+  main = "GSE15932 Multi-Gene Logistic ROC",
+  print.auc = TRUE,
+  print.auc.cex = 1.3
+)
+
+abline(
+  a = 0,
+  b = 1,
+  lty = 2,
+  col = "gray"
+)
+
+```
+
+---
+
+# 22. Overlay Multi-Gene and Single-Gene ROC Curves
+
+The multi-gene logistic regression model is compared with the individual biomarkers.
+
+```{r roc-overlay}
+
+png(
+  file.path(
+    figure_dir,
+    "GSE15932_ROC_overlay.png"
+  ),
+  width = 1200,
+  height = 1000
+)
+
+# Multi-gene ROC
+
+plot(
+  roc_panel,
+  col = "black",
+  lwd = 5,
+  main = "Multi vs Single Gene ROC",
+  print.auc = TRUE,
+  print.auc.cex = 1.4,
+  print.auc.y = 0.25
+)
+
+# Prepare legend
+
+legend_labels <- c(
+  paste0(
+    "Multi-gene (AUC = ",
+    round(
+      auc(roc_panel),
+      3
+    ),
+    ")"
+  )
+)
+
+# Colors for individual genes
+
+cols <- c(
+  "red",
+  "blue",
+  "green",
+  "purple",
+  "orange"
+)
+
+i <- 1
+
+for (gene in common_genes) {
+
+  roc_single <- roc(
+    df$group,
+    df[[gene]]
+  )
+
+  auc_val <- auc(
+    roc_single
+  )
+
+  # Add individual ROC curve
+
+  plot(
+    roc_single,
+    add = TRUE,
+    col = cols[i],
+    lwd = 2
+  )
+
+  # Add AUC to legend
+
+  legend_labels <- c(
+    legend_labels,
+    paste0(
+      gene,
+      " (AUC = ",
+      round(
+        auc_val,
+        3
+      ),
+      ")"
+    )
+  )
+
+  i <- i + 1
+
+}
+
+# Add legend
+
+legend(
+  "bottomright",
+  legend = legend_labels,
+  col = c(
+    "black",
+    cols
+  ),
+  lwd = c(
+    5,
+    rep(
+      2,
+      length(common_genes)
+    )
+  ),
+  cex = 1.4,
+  pt.cex = 1.6,
+  y.intersp = 1.5,
+  x.intersp = 1.3,
+  seg.len = 3.5,
+  box.lwd = 2,
+  inset = 0.02
+)
+
+dev.off()
+
+```
+
+---
+
+# 23. Display ROC Overlay
+
+```{r display-roc-overlay, fig.width=11, fig.height=9}
+
+plot(
+  roc_panel,
+  col = "black",
+  lwd = 5,
+  main = "GSE15932: Multi-Gene vs Single-Gene ROC",
+  print.auc = TRUE,
+  print.auc.cex = 1.3,
+  print.auc.y = 0.25
+)
+
+legend_labels <- c(
+  paste0(
+    "Multi-gene (AUC = ",
+    round(
+      auc(roc_panel),
+      3
+    ),
+    ")"
+  )
+)
+
+cols <- c(
+  "red",
+  "blue",
+  "green",
+  "purple",
+  "orange"
+)
+
+i <- 1
+
+for (gene in common_genes) {
+
+  roc_single <- roc(
+    df$group,
+    df[[gene]]
+  )
+
+  auc_val <- auc(
+    roc_single
+  )
+
+  plot(
+    roc_single,
+    add = TRUE,
+    col = cols[i],
+    lwd = 2
+  )
+
+  legend_labels <- c(
+    legend_labels,
+    paste0(
+      gene,
+      " (AUC = ",
+      round(
+        auc_val,
+        3
+      ),
+      ")"
+    )
+  )
+
+  i <- i + 1
+
+}
+
+legend(
+  "bottomright",
+  legend = legend_labels,
+  col = c(
+    "black",
+    cols
+  ),
+  lwd = c(
+    5,
+    rep(
+      2,
+      length(common_genes)
+    )
+  ),
+  cex = 1.2,
+  y.intersp = 1.3,
+  seg.len = 3
+)
+
+```
+
+---
+
+# 24. Determine Optimal Cutoff Using the Youden Index
+
+The optimal classification threshold is identified using the Youden index.
+
+The Youden index maximizes:
+
+**Sensitivity + Specificity - 1**
+
+```{r youden-cutoff}
+
+opt_cut <- coords(
+  roc_panel,
+  "best",
+  ret = c(
+    "threshold",
+    "sensitivity",
+    "specificity"
+  ),
+  best.method = "youden"
+)
+
+cat("\nOptimal cutoff using Youden index:\n\n")
+
+print(opt_cut)
+
+```
+
+---
+
+# 25. Classification Using the Optimal Cutoff
+
+The first optimal threshold returned by the ROC analysis is used for classification.
+
+```{r classification}
+
+threshold <- opt_cut$threshold[1]
+
+pred_class <- ifelse(
+  pred >= threshold,
+  "Tumor",
+  "Control"
+)
+
+pred_class <- factor(
+  pred_class,
+  levels = c(
+    "Control",
+    "Tumor"
+  )
+)
+
+```
+
+---
+
+# 26. Confusion Matrix
+
+The predicted classifications are compared with the actual group labels.
+
+```{r confusion-matrix}
+
+cat("\nConfusion Matrix:\n\n")
+
+confusion_matrix <- table(
+  Predicted = pred_class,
+  Actual = df$group
+)
+
+print(confusion_matrix)
+
+```
+
+---
+
+# 27. Save Risk Scores
+
+The predicted probability for each sample is stored as the `risk_score`.
+
+```{r save-risk-scores}
+
+df$risk_score <- pred
+
+write.csv(
+  df,
+  file.path(
+    result_dir,
+    "GSE15932_RiskScores.csv"
+  ),
+  row.names = FALSE
+)
+
+```
+
+---
+
+# 28. Save ROC Curve Coordinates
+
+The sensitivity and specificity values used to construct the ROC curve are saved for further plotting or analysis.
+
+```{r save-roc-coordinates}
+
+roc_df <- data.frame(
+  specificity = roc_panel$specificities,
+  sensitivity = roc_panel$sensitivities
+)
+
+write.csv(
+  roc_df,
+  file.path(
+    result_dir,
+    "GSE15932_ROC_curve.csv"
+  ),
+  row.names = FALSE
+)
+
+```
+
+---
+
+# 29. Final Results Summary
+
+```{r final-summary}
+
+cat("\n========================================\n")
+cat("GSE15932 EXTERNAL VALIDATION SUMMARY\n")
+cat("========================================\n\n")
+
+cat(
+  "Number of samples:",
+  nrow(df),
+  "\n"
+)
+
+cat(
+  "Control samples:",
+  sum(df$group == "Control"),
+  "\n"
+)
+
+cat(
+  "Tumor samples:",
+  sum(df$group == "Tumor"),
+  "\n"
+)
+
+cat(
+  "\nGenes included:\n"
+)
+
+print(common_genes)
+
+cat(
+  "\nMulti-gene AUC:",
+  round(
+    as.numeric(
+      auc(roc_panel)
+    ),
+    3
+  ),
+  "\n"
+)
+
+cat(
+  "\nDeLong 95% CI:\n"
+)
+
+print(
+  ci.auc(roc_panel)
+)
+
+cat(
+  "\nOptimal Youden cutoff:",
+  round(
+    threshold,
+    4
+  ),
+  "\n"
+)
+
+cat(
+  "\nConfusion Matrix:\n"
+)
+
+print(confusion_matrix)
+
+cat(
+  "\n========================================\n"
+)
+
+cat(
+  "External validation completed successfully.\n"
+)
+
+cat(
+  "========================================\n"
+)
+
+```
+
+# 30. Output Files
+
+The following files are generated by this analysis.
+
+### Figures
+
+* `GSE15932_multi_gene_ROC.png`
+* `GSE15932_ROC_overlay.png`
+* Individual ROC plots for each biomarker in:
+
+`figures/single_gene_ROC/`
+
+### Results
+
+* `GSE15932_single_gene_AUC.csv`
+* `GSE15932_RiskScores.csv`
+* `GSE15932_ROC_curve.csv`
+
+---
+
+# 31. Interpretation
+
+This analysis evaluates whether the selected biomarker panel can distinguish pancreatic cancer blood samples from healthy controls in the independent **GSE15932** dataset.
+
+The **multi-gene logistic regression model** provides a combined risk score based on the expression levels of the selected biomarkers. Its performance is assessed using the ROC curve and AUC.
+
+Individual ROC analyses allow the diagnostic contribution of each biomarker to be compared with the combined multi-gene panel.
+
+The **Youden index** is used to identify an optimal threshold for converting continuous predicted probabilities into binary classifications of **Tumor** or **Control**.
+
+The confusion matrix provides the resulting classification counts at this threshold.
+
+Importantly, GSE15932 is an **external blood-based validation dataset**, whereas the biomarker discovery analysis was performed using a separate pancreatic cancer dataset. Therefore, the results provide an assessment of whether the selected biomarker signature retains discriminatory performance in an independent blood cohort.

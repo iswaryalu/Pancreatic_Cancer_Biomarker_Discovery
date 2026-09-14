@@ -1,0 +1,311 @@
+---
+title: "Functional Analysis of DEG ∩ WGCNA Overlap Genes"
+author: "Iswarya L U"
+date: "11-02-2026"
+output: html_document
+---
+##necessary packages
+```{r}
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(enrichplot)
+library(ggplot2)
+library(DOSE)
+library(dplyr)
+library(pathview)
+
+```
+
+## Objective
+
+The genes identified from the intersection of the differentially expressed genes (DEGs) and WGCNA-derived hub genes were subjected to functional enrichment analysis.
+
+The purpose of this analysis was to determine whether the overlapping genes are significantly associated with particular:
+
+Gene Ontology (GO) Biological Processes
+Gene Ontology (GO) Cellular Components
+Gene Ontology (GO) Molecular Functions
+Disease Ontology (DO) terms
+KEGG signaling pathways
+
+This analysis helps determine the biological functions and pathways represented by the candidate genes identified through the integrated DEG and WGCNA analysis.
+
+## 1.Load DEG ∩ WGCNA Overlap Genes
+
+The genes common to the DEG and WGCNA analyses are loaded from the previously generated gene list.
+
+```{r}
+overlap_file <- "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/results/integration of deg and wgcna/Hub_DEG_overlap_genes.csv"
+
+overlap_symbols <- read.table(
+  overlap_file,
+  header = TRUE,
+  stringsAsFactors = FALSE
+)
+
+gene_symbols <- toupper(overlap_symbols$Gene)
+
+```
+
+he gene symbols are converted to uppercase to improve consistency with the human gene annotation database.
+
+Input: DEG ∩ WGCNA overlap genes
+Output: A standardized list of human gene symbols.
+
+## 2.Convert Gene Symbols to Entrez Gene IDs
+
+clusterProfiler enrichment functions commonly use Entrez Gene IDs for enrichment analysis. Therefore, the gene symbols are converted to Entrez IDs using org.Hs.eg.db.
+
+
+```{r}
+gene_df <- bitr(
+  gene_symbols,
+  fromType = "SYMBOL",
+  toType = "ENTREZID",
+  OrgDb = org.Hs.eg.db
+)
+
+entrez_ids <- unique(gene_df$ENTREZID)
+```
+
+Duplicate Entrez IDs are removed to ensure that each gene is represented only once in the enrichment analysis.
+
+It is also useful to check how many genes were successfully mapped:
+
+
+
+```{r}
+cat("Input genes:", length(gene_symbols), "\n")
+cat("Mapped Entrez IDs:", length(entrez_ids), "\n")
+
+```
+
+## 3.Define the Background Gene Universe
+
+A background gene universe is used to reduce bias in enrichment analysis. Here, the background consists of human genes that can be mapped using the same annotation database.
+
+
+
+```{r}
+background_symbols <- keys(org.Hs.eg.db,keytype = "SYMBOL")
+
+background_df <- bitr(
+  background_symbols,
+  fromType = "SYMBOL",
+  toType = "ENTREZID",
+  OrgDb = org.Hs.eg.db
+)
+
+background_ids <- unique(background_df$ENTREZID)
+
+```
+
+The background universe provides the reference set against which enrichment of the overlap genes is evaluated.
+
+## 4.Gene Ontology Enrichment Analysis
+
+Gene Ontology enrichment was performed separately for the three major GO categories:
+
+Biological Process (BP) – biological processes in which the genes participate.
+Cellular Component (CC) – cellular locations or structures associated with the genes.
+Molecular Function (MF) – molecular activities performed by the gene products.
+
+Benjamini–Hochberg (BH) correction is used to control the false discovery rate.
+
+
+
+
+```{r}
+#BP
+
+ego_bp <- enrichGO(gene = entrez_ids,universe = background_ids,OrgDb = org.Hs.eg.db,ont = "BP", pAdjustMethod = "BH",qvalueCutoff = 0.05,readable = TRUE)
+
+#CC
+
+ego_cc <- enrichGO(
+  gene = entrez_ids,
+  universe = background_ids,
+  OrgDb = org.Hs.eg.db,
+  ont = "CC",
+  pAdjustMethod = "BH",
+  qvalueCutoff = 0.05,
+  readable = TRUE
+)
+
+
+
+
+#MF
+
+ego_mf <- enrichGO(
+  gene = entrez_ids,
+  universe = background_ids,
+  OrgDb = org.Hs.eg.db,
+  ont = "MF",
+  pAdjustMethod = "BH",
+  qvalueCutoff = 0.05,
+  readable = TRUE
+)
+
+
+
+```
+
+#save the results in csv
+
+
+
+
+```{r}
+write.csv(as.data.frame(ego_bp),"C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/results/GO_BP_overlap.csv")
+
+write.csv(as.data.frame(ego_cc),"C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/results/GO_CC_overlap.csv")
+
+write.csv(as.data.frame(ego_mf),"C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/results/GO_MF_overlap.csv")
+
+```
+
+
+
+## 5.KEGG Pathway Enrichment
+
+KEGG enrichment was performed to identify signaling and metabolic pathways significantly associated with the overlap genes.
+
+
+```{r}
+ekegg <- enrichKEGG(
+  gene = entrez_ids,
+  organism = "hsa",
+  universe = background_ids,
+  pvalueCutoff = 0.05
+)
+
+write.csv(as.data.frame(ekegg),"C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/results/KEGG_overlap.csv")
+
+```
+
+The enriched KEGG pathways can help identify biological signaling mechanisms potentially associated with the candidate genes.
+
+## 6.Visualization of Enrichment Results
+
+## 6.1 Combine GO Biological Process, Cellular Component and Molecular Function
+
+The three GO enrichment results are combined into a single data frame to facilitate comparison and visualization.
+
+
+```{r}
+bp_df <- as.data.frame(ego_bp)
+cc_df <- as.data.frame(ego_cc)
+mf_df <- as.data.frame(ego_mf)
+
+bp_df$ONTOLOGY <- "BP"
+cc_df$ONTOLOGY <- "CC"
+mf_df$ONTOLOGY <- "MF"
+
+go_all <- rbind(
+  bp_df,
+  cc_df,
+  mf_df
+)
+
+#The top seven enriched terms from each GO category are selected based on adjusted p-value.
+go_all <- go_all %>%
+  group_by(ONTOLOGY) %>%
+  arrange(p.adjust) %>%
+  dplyr::slice(1:7) %>%
+  ungroup()
+
+#The terms are ordered according to their appearance in the plot.
+go_all$Description <- factor(
+  go_all$Description,
+  levels = rev(unique(go_all$Description))
+)
+
+```
+
+## 7.2 GO Enrichment Bar Plot
+
+A bar plot is generated to visualize the most significant GO terms across BP, CC and MF.
+
+The bar length represents the number of overlap genes (Count) associated with each GO term, while the color represents the adjusted p-value.
+
+
+```{r}
+go_paper_plot <- ggplot(
+  go_all,
+  aes(
+    x = Count,
+    y = Description,
+    fill = p.adjust
+  )
+) +
+  geom_bar(stat = "identity") +
+  facet_grid(
+    ONTOLOGY ~ .,
+    scales = "free_y",
+    switch = "y"
+  ) +
+  scale_fill_gradient(
+    low = "red",
+    high = "blue"
+  ) +
+  labs(
+    title = "GO Enrichment of Overlap Genes",
+    x = "Count",
+    y = NULL,
+    fill = "P value"
+  ) +
+  theme_bw() +
+  theme(
+    strip.placement = "outside",
+    strip.background = element_rect(fill = "grey85"),
+    strip.text.y.right = element_text(
+      angle = 0,
+      face = "bold"
+    ),
+    panel.spacing = unit(0.5, "lines")
+  )
+
+
+go_paper_plot
+
+# to save 
+
+ggsave("C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/figures/GO_ALL_paper_style.png",go_paper_plot,width = 7,height = 8)
+
+```
+
+
+
+## 9. KEGG Pathway Visualization
+
+The top 15 KEGG pathways are visualized using a dot plot.
+
+
+
+```{r}
+kegg_plot <- dotplot(
+  ekegg,
+  showCategory = 15
+) +
+  ggtitle("KEGG Pathway Enrichment – Overlap Genes") +
+  theme_bw()
+
+kegg_plot
+
+ggsave( "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/figures/KEGG_dotplot.png", kegg_plot, width = 8, height = 6)
+
+kegg_bar <- barplot(
+  ekegg,
+  showCategory = 15
+) +
+  ggtitle("KEGG Pathway Enrichment – Overlap Genes") +
+  theme_bw()
+
+
+kegg_bar
+
+ggsave( "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/figures/KEGG_barplot.png",kegg_bar, width = 8, height = 6)
+```
+
+

@@ -1,0 +1,1847 @@
+title: "Weighted Gene Co-expression Network Analysis of Pancreatic Cancer for the Dataset GSE183795"
+author: "Iswarya L U"
+date: "13-09-2026"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: show
+---
+
+# Weighted Gene Co-expression Network Analysis
+
+## Overview
+
+Weighted Gene Co-expression Network Analysis (WGCNA) was performed to identify
+gene co-expression modules associated with pancreatic cancer status.
+
+The analysis was performed using the normalized expression matrix from
+GSE183795.
+
+The original dataset contained approximately:
+
+- 19,974 genes
+- 244 samples
+- 139 Tumor samples
+- 102 adjacent non-tumor samples
+- 3 Normal samples
+
+Variance filtering was performed using all available samples so that the Normal
+samples contributed to the identification of highly variable genes.
+
+The Normal samples were subsequently excluded from WGCNA network construction.
+Therefore, the final WGCNA network was constructed using Tumor and adjacent
+non-tumor samples only.
+
+Genes above the 25th percentile of gene variance were retained for downstream
+network analysis.
+
+The major steps of this analysis were:
+
+1. Loading required R packages
+2. Loading normalized expression and metadata
+3. Checking tissue groups
+4. Aligning expression data and metadata
+5. Variance filtering
+6. Selecting Tumor and adjacent non-tumor samples
+7. Preparing the WGCNA expression matrix
+8. Quality control
+9. Sample clustering
+10. Principal component analysis
+11. Soft-threshold power selection
+12. Network construction
+13. Module identification
+14. Module-trait relationship analysis
+15. Module membership and gene significance analysis
+16. Identification of significant modules
+17. Identification of hub genes
+18. Saving WGCNA results
+
+---
+
+# 1. Necessary Packages
+
+This section loads all R packages required for the WGCNA analysis,
+data manipulation, visualization, and heatmap generation.
+
+```{r setup, message=FALSE, warning=FALSE,fig.width=12 , fig.height=16,  dpi=100, out.width="1200px",out.height="1600px"}
+
+# Clear the R environment
+rm(list = ls())
+
+# Close previously opened graphics devices
+graphics.off()
+
+# Set seed for reproducibility
+set.seed(1234)
+
+# Load required packages
+library(WGCNA)
+library(matrixStats)
+library(dplyr)
+library(ggplot2)
+library(pheatmap)
+library(gridExtra)
+
+# Prevent automatic conversion of strings to factors
+options(stringsAsFactors = FALSE)
+
+```
+
+##Enable WGCNA Multithreading
+
+WGCNA can use multiple CPU cores for computationally intensive operations.
+This can considerably reduce the execution time for large expression matrices.
+
+
+```{r}
+
+# Allow WGCNA to use multiple CPU cores
+enableWGCNAThreads()
+
+```
+
+# 2. Load Processed Expression Data and Metadata
+
+The normalized expression matrix and corresponding sample metadata are loaded
+from CSV files.
+
+The expression matrix is expected to contain genes as rows and samples as
+columns.
+
+The metadata contains sample information, including the tissue classification.
+
+
+```{r}
+
+# Define input file paths
+
+expr_path <- "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/data/normalized_expression_matrix.csv"
+
+meta_path <- "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/data/meta_clean.csv"
+
+
+# Load normalized expression matrix
+
+expr <- read.csv(
+  expr_path,
+  row.names = 1,
+  check.names = FALSE
+)
+
+
+# Load sample metadata
+
+meta <- read.csv(
+  meta_path,
+  row.names = 1,
+  check.names = FALSE
+)
+
+
+# Display dimensions
+
+cat("Expression matrix dimensions:\n")
+print(dim(expr))
+
+cat("\nMetadata dimensions:\n")
+print(dim(meta))
+
+
+# Display first few genes
+
+cat("\nFirst few expression genes:\n")
+print(head(rownames(expr)))
+
+
+# Display first few metadata rows
+
+cat("\nFirst few metadata rows:\n")
+print(head(meta))
+
+
+```
+
+# 3. Check Tissue Groups
+
+Before performing WGCNA, the distribution of samples among the different tissue
+groups is examined.
+
+This confirms that the metadata contains the expected sample classifications.
+
+
+```{r}
+
+cat("Tissue groups:\n")
+
+print(
+  table(meta$tissue)
+)
+
+
+```
+
+The expected groups are:
+
+Tumor
+adjacent non-tumor
+Normal
+
+The Normal samples will later be excluded from the WGCNA network construction.
+
+# 4. Standardize Sample Names
+
+The expression matrix and metadata must use identical sample identifiers.
+
+Here, suffixes beginning with an underscore are removed from both expression
+sample names and metadata sample names.
+
+
+```{r}
+
+# Standardize expression sample names
+
+colnames(expr) <- gsub(
+  "_.*",
+  "",
+  colnames(expr)
+)
+
+
+# Standardize metadata sample names
+
+rownames(meta) <- gsub(
+  "_.*",
+  "",
+  rownames(meta)
+)
+
+
+# Display sample counts
+
+cat("Number of expression samples:\n")
+print(length(colnames(expr)))
+
+cat("\nNumber of metadata samples:\n")
+print(length(rownames(meta)))
+
+
+# Determine common samples
+
+cat("\nNumber of common samples:\n")
+
+print(
+  length(
+    intersect(
+      colnames(expr),
+      rownames(meta)
+    )
+  )
+)
+
+
+```
+
+# 5. Align Expression Matrix and Metadata
+
+Only samples present in both the expression matrix and metadata are retained.
+
+The ordering of samples is then made identical in both datasets.
+
+This is essential because WGCNA assumes that every expression profile is
+associated with the correct sample metadata.
+
+
+```{r}
+
+# Identify common samples
+
+common_samples <- intersect(
+  colnames(expr),
+  rownames(meta)
+)
+
+
+# Keep only common samples
+
+expr <- expr[
+  ,
+  common_samples,
+  drop = FALSE
+]
+
+meta <- meta[
+  common_samples,
+  ,
+  drop = FALSE
+]
+
+
+# Verify exact alignment
+
+stopifnot(
+  all(
+    colnames(expr) == rownames(meta)
+  )
+)
+
+
+# Display dimensions after alignment
+
+cat("Aligned expression matrix dimensions:\n")
+print(dim(expr))
+
+cat("\nAligned metadata dimensions:\n")
+print(dim(meta))
+
+
+# Confirm successful alignment
+
+cat("\nSample alignment successful:\n")
+
+print(
+  all(
+    colnames(expr) == rownames(meta)
+  )
+)
+
+
+```
+
+
+# 6. Variance Filtering
+
+Genes with very low expression variance provide limited information for
+co-expression network construction.
+
+Therefore, gene-wise variance is calculated across all available samples.
+
+Importantly, the variance filtering step is performed before excluding the
+Normal samples. This allows the Normal samples to contribute to identifying
+variable genes.
+
+Genes with variance greater than the 25th percentile are retained.
+
+
+
+```{r}
+
+# Convert expression data to a numeric matrix
+
+expr_mat <- as.matrix(expr)
+
+
+# Calculate variance for every gene
+
+gene_var <- rowVars(
+  expr_mat
+)
+
+
+# Calculate the 25th percentile variance cutoff
+
+variance_cutoff <- quantile(
+  gene_var,
+  0.25
+)
+
+
+cat("25th percentile variance cutoff:\n")
+print(variance_cutoff)
+
+
+# Number of genes before filtering
+
+cat("\nNumber of genes before filtering:\n")
+print(
+  length(gene_var)
+)
+
+
+# Retain genes with variance greater than the cutoff
+
+expr_mat <- expr_mat[
+  gene_var > variance_cutoff,
+  ,
+  drop = FALSE
+]
+
+
+# Convert filtered matrix back to data frame
+
+expr <- as.data.frame(
+  expr_mat
+)
+
+
+# Report number of retained genes
+
+cat("\nNumber of genes after variance filtering:\n")
+print(
+  nrow(expr)
+)
+
+
+```
+
+After this filtering step, approximately 75% of the original genes are
+retained, depending on the distribution of gene variance.
+
+# 7. Select Tumor and Adjacent Non-Tumor Samples
+
+The three Normal samples are excluded from the WGCNA network construction.
+
+Only Tumor and adjacent non-tumor samples are retained.
+
+
+```{r}
+
+# Select Tumor and adjacent non-tumor samples
+
+keep_samples <- rownames(meta)[
+  meta$tissue %in%
+    c(
+      "Tumor",
+      "adjacent_non_tumor"
+    )
+]
+
+
+# Create WGCNA expression matrix
+
+expr_wgcna <- expr[
+  ,
+  keep_samples,
+  drop = FALSE
+]
+
+
+# Create corresponding metadata
+
+meta_sub <- meta[
+  keep_samples,
+  ,
+  drop = FALSE
+]
+
+
+# Display number of WGCNA samples
+
+cat("Number of WGCNA samples:\n")
+print(
+  nrow(meta_sub)
+)
+
+
+# Display tissue distribution
+
+cat("\nWGCNA tissue groups:\n")
+
+print(
+  table(meta_sub$tissue)
+)
+
+
+# Display expression matrix dimensions
+
+cat("\nExpression matrix dimensions after sample selection:\n")
+
+print(
+  dim(expr_wgcna)
+)
+
+
+
+```
+
+
+The resulting dataset should contain the Tumor and adjacent non-tumor samples
+only.
+
+# 8. Prepare the WGCNA Expression Matrix
+
+WGCNA requires the expression matrix to have:
+
+Samples as rows
+Genes as columns
+
+The current expression matrix has genes as rows and samples as columns.
+Therefore, the matrix is transposed.
+
+
+```{r}
+
+# Transpose expression matrix
+
+datExpr <- t(
+  expr_wgcna
+)
+
+
+# Convert to data frame
+
+datExpr <- as.data.frame(
+  datExpr
+)
+
+
+# Display dimensions
+
+cat("WGCNA expression matrix dimensions:\n")
+
+print(
+  dim(datExpr)
+)
+
+
+cat("\nRows represent samples and columns represent genes.\n")
+
+
+```
+
+
+# 9. Align Metadata With Expression Matrix
+
+The metadata is reordered so that its sample order exactly matches the rows of
+the WGCNA expression matrix.
+
+```{r}
+
+# Reorder metadata according to expression matrix
+
+meta_sub <- meta_sub[
+  rownames(datExpr),
+  ,
+  drop = FALSE
+]
+
+
+# Confirm exact alignment
+
+stopifnot(
+  all(
+    rownames(meta_sub) ==
+      rownames(datExpr)
+  )
+)
+
+
+cat("Metadata and expression matrix alignment successful:\n")
+
+print(
+  all(
+    rownames(meta_sub) ==
+      rownames(datExpr)
+  )
+)
+
+
+```
+
+
+# 10. Define the Tumor Trait
+
+To evaluate the relationship between co-expression modules and pancreatic
+cancer status, tissue status is converted into a numerical binary trait.
+
+The coding is:
+
+Tumor = 1
+Adjacent non-tumor = 0
+
+```{r}
+
+
+# Create numerical tumor trait
+
+traits_num <- data.frame(
+  Tumor = ifelse(
+    meta_sub$tissue == "Tumor",
+    1,
+    0
+  )
+)
+
+
+# Assign sample names
+
+rownames(traits_num) <- rownames(
+  meta_sub
+)
+
+
+# Display trait distribution
+
+cat("Tumor trait distribution:\n")
+
+print(
+  table(
+    traits_num$Tumor
+  )
+)
+
+
+cat("\nTrait coding:\n")
+cat("Tumor = 1\n")
+cat("Adjacent non-tumor = 0\n")
+
+```
+
+This binary trait will later be correlated with module eigengenes to determine
+which modules are associated with pancreatic tumor status.
+
+# 11. WGCNA Quality Control
+
+The goodSamplesGenes() function checks whether samples and genes contain
+excessive missing or problematic values.
+
+Samples and genes that fail quality control can be removed before network
+construction.
+
+
+```{r}
+
+# Perform WGCNA quality control
+
+gsg <- goodSamplesGenes(
+  datExpr,
+  verbose = 3
+)
+
+
+# Display QC status
+
+cat("All samples and genes passed initial WGCNA quality control:\n")
+
+print(
+  gsg$allOK
+)
+
+
+# Remove problematic samples or genes if necessary
+
+if (!gsg$allOK) {
+  
+  datExpr <- datExpr[
+    gsg$goodSamples,
+    gsg$goodGenes,
+    drop = FALSE
+  ]
+  
+  
+  meta_sub <- meta_sub[
+    rownames(datExpr),
+    ,
+    drop = FALSE
+  ]
+  
+  
+  traits_num <- traits_num[
+    rownames(datExpr),
+    ,
+    drop = FALSE
+  ]
+}
+
+
+# Display final dimensions
+
+cat("\nFinal dimensions after WGCNA QC:\n")
+
+print(
+  dim(datExpr)
+)
+
+
+
+```
+
+# 12. Sample Clustering
+
+Hierarchical clustering is used to examine the similarity between samples.
+
+Samples that cluster far away from the main sample population may represent
+potential outliers.
+
+A horizontal reference line at height 150 is included based on the predefined
+quality-control threshold.
+
+
+
+```{r}
+
+# Perform hierarchical clustering
+
+sampleTree <- hclust(
+  dist(datExpr),
+  method = "average"
+)
+
+
+# Plot sample dendrogram
+
+plot(
+  sampleTree,
+  main = "Sample Clustering",
+  xlab = "",
+  sub = "",
+  cex = 0.6
+)
+
+
+# Add reference threshold
+
+abline(
+  h = 150,
+  col = "red",
+  lty = 2
+)
+
+png("C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/figures/wgcna/sample_tree.png", width = 1000, height = 600)
+plot(sampleTree, main = "Sample clustering (Tumor vs Adjacent Non-Tumor)", sub = "", xlab = "", cex = 0.6)
+abline(h = 150, col = "red")
+dev.off()
+```
+
+
+The dendrogram is used to visually assess whether any samples are clear
+outliers.
+
+# 13. Principal Component Analysis
+
+Principal component analysis (PCA) is performed to visualize the overall
+structure of the expression data.
+
+The first two principal components are plotted and colored according to tissue
+type.
+
+
+```{r}
+
+
+# Perform PCA
+
+pca <- prcomp(
+  datExpr,
+  scale. = TRUE
+)
+
+
+# Create PCA data frame
+
+pca_df <- data.frame(
+  pca$x[, 1:2],
+  Tissue = meta_sub$tissue
+)
+
+
+# Plot PCA
+png("C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/figures/wgcna/PCA_plot.png", width = 1000, height = 800)
+ggplot(
+  pca_df,
+  aes(
+    x = PC1,
+    y = PC2,
+    color = Tissue
+  )
+) +
+  geom_point(
+    size = 3
+  ) +
+  theme_minimal() +
+  labs(
+    title = "PCA of Tumor vs Adjacent Non-Tumor",
+    x = paste0(
+      "PC1 (",
+      round(
+        summary(pca)$importance[2, 1] * 100,
+        2
+      ),
+      "%)"
+    ),
+    y = paste0(
+      "PC2 (",
+      round(
+        summary(pca)$importance[2, 2] * 100,
+        2
+      ),
+      "%)"
+    )
+  )
+
+
+dev.off()
+
+```
+
+Clear separation between Tumor and adjacent non-tumor samples would indicate
+that tissue status is a major source of expression variation.
+
+However, PCA is primarily a visualization tool and does not itself determine
+whether a module is biologically significant.
+
+
+# 14. Soft-Threshold Power Selection
+
+WGCNA uses a soft-thresholding power to transform gene correlations into
+network connection strengths.
+
+Several candidate powers are evaluated to identify a power that produces a
+network approximating scale-free topology while maintaining sufficient
+connectivity.
+
+A signed network is used so that positively correlated genes are emphasized
+while negative correlations are treated differently.
+
+
+```{r}
+
+# Define candidate soft-thresholding powers
+
+power <- c(
+  1:10,
+  seq(
+    12,
+    50,
+    2
+  )
+)
+
+
+# Evaluate candidate powers
+
+sft <- pickSoftThreshold(
+  datExpr,
+  powerVector = power,
+  networkType = "signed",
+  verbose = 5
+)
+
+
+cat("Soft-threshold analysis completed.\n")
+sft.data <- sft$fitIndices
+
+cat("\nSoft-threshold fit indices:\n")
+
+print(
+  sft$fitIndices
+)
+
+
+```
+
+
+# 15. Soft-Threshold Diagnostic Plot
+
+Two diagnostic plots are generated:
+
+Scale-free topology model fit
+Mean connectivity
+
+A reference line at R² = 0.8 is included to help evaluate the scale-free
+topology criterion.
+```{r}
+
+# Plot scale-free topology
+a1 <- ggplot(sft.data, aes(Power, SFT.R.sq, label = Power)) +
+  geom_point() + geom_text(nudge_y = 0.1) +
+  geom_hline(yintercept = 0.8, color = "red") +
+  labs(x = "Soft threshold (Power)", y = "Scale-free topology model fit, signed R^2") +
+  theme_classic()
+
+a2 <- ggplot(sft.data, aes(Power, mean.k., label = Power)) +
+  geom_point() +
+  geom_text(nudge_y = 0.1) +
+  geom_hline(yintercept = 0, color = "red", linetype = "dashed", size = 1) +
+  labs(x = "Soft threshold (Power)", y = "Mean Connectivity") +
+  theme_classic()
+combined_plot <- arrangeGrob(a1, a2, nrow = 2)
+a1
+a2
+ggsave("C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/figures/wgcna/soft_thresholding_plot_tumor_vs_adj.pdf", combined_plot, width = 8, height = 10)
+# Save the first plot (Scale-free topology)
+ggsave(
+  "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/figures/wgcna/soft_thresholding_scale_free_tumor_vs_adj.png",
+  plot = a1,
+  width = 6, height = 5, dpi = 300
+)
+
+# Save the second plot (Mean connectivity)
+ggsave(
+  "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/figures/wgcna/soft_thresholding_mean_connectivity_tumor_vs_adj.png",
+  plot = a2,
+  width = 7, height = 5, dpi = 300
+)
+
+
+```
+
+
+
+# 16. Select Soft-Threshold Power
+
+Based on the previously evaluated scale-free topology and connectivity
+results, a soft-thresholding power of 14 was selected for the network
+construction.
+
+
+```{r}
+
+# Selected soft-thresholding power
+
+soft_power <- 14
+
+
+cat("Selected soft-thresholding power:\n")
+
+print(
+  soft_power
+)
+
+
+```
+
+The selected power should be justified using the diagnostic plot and the
+corresponding scale-free topology fit and connectivity values.
+
+# 17. Construct the WGCNA Network
+
+A signed weighted gene co-expression network is constructed using the selected
+soft-thresholding power.
+
+Genes with similar expression patterns across samples are grouped into
+co-expression modules.
+
+Modules with highly similar eigengene profiles are merged using a merge
+cut-height of 0.25.
+
+
+```{r}
+
+# Construct weighted gene co-expression network
+
+bwnet <- blockwiseModules(
+  datExpr,
+  power = soft_power,
+  TOMType = "signed",
+  mergeCutHeight = 0.25,
+  numericLabels = FALSE,
+  randomSeed = 1234,
+  verbose = 3
+)
+
+
+cat("WGCNA network construction completed.\n")
+
+
+```
+
+# 18. Extract Module Information
+
+The module color assigned to every gene and the module eigengenes are
+extracted from the WGCNA results.
+
+A module eigengene represents the major expression pattern of all genes within
+a module.
+
+
+```{r}
+
+# Extract module assignments
+
+moduleColors <- bwnet$colors
+
+
+# Extract module eigengenes
+
+MEs <- bwnet$MEs
+
+
+# Display number of modules
+
+cat("Number of detected modules:\n")
+
+print(
+  length(
+    unique(moduleColors)
+  )
+)
+
+
+# Display module sizes
+
+cat("\nModule sizes:\n")
+
+print(
+  table(moduleColors)
+)
+
+
+```
+
+
+# 19. Module Dendrogram
+
+The module dendrogram visualizes the hierarchical organization of the detected
+co-expression modules.
+
+Each color represents a different co-expression module.
+
+
+
+```{r}
+# Number of genes in block 1
+block1_n <- length(bwnet$dendrograms[[1]]$order)
+
+# Extract colors corresponding to block 1
+block1_unmerged <- bwnet$unmergedColors[1:block1_n]
+block1_merged   <- bwnet$colors[1:block1_n]
+
+png("C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/figures/wgcna/module_dendrogram_tumor_vs_adj.png", width = 1200, height = 800, res = 150)
+
+# Plot block 1 dendrogram with unmerged and merged colors
+plotDendroAndColors(
+  bwnet$dendrograms[[1]],
+  cbind(
+    block1_unmerged,
+    block1_merged
+  ),
+  c(
+    "Unmerged",
+    "Merged"
+  ),
+  dendroLabels = FALSE,
+  hang = 0.03,
+  addGuide = TRUE,
+  guideHang = 0.05
+)
+
+
+dev.off()
+
+```
+
+# 20. Module-Trait Relationships
+
+The relationship between each module eigengene and the Tumor trait is
+calculated using Pearson correlation.
+
+The resulting correlation indicates whether a module is positively or
+negatively associated with tumor status.
+
+P-values are calculated using the Student correlation significance test.
+
+
+```{r}
+
+# Calculate module-trait correlations
+
+moduleTraitCor <- cor(
+  MEs,
+  traits_num,
+  use = "p"
+)
+
+
+# Calculate corresponding p-values
+
+moduleTraitPvalue <- corPvalueStudent(
+  moduleTraitCor,
+  nrow(datExpr)
+)
+
+
+# Display correlations
+
+cat("Module-Trait Correlation:\n")
+
+print(
+  moduleTraitCor
+)
+
+
+# Display p-values
+
+cat("\nModule-Trait P-values:\n")
+
+print(
+  moduleTraitPvalue
+)
+
+
+```
+
+
+# 21. Prepare Module-Trait Heatmap Values
+
+The correlation coefficient and corresponding p-value are combined into a
+single text matrix.
+
+The correlation is displayed first, followed by the p-value in parentheses.
+
+
+```{r}
+
+# Create heatmap annotation text
+
+textMatrix <- paste(
+  signif(
+    moduleTraitCor,
+    2
+  ),
+  "\n(",
+  signif(
+    moduleTraitPvalue,
+    1
+  ),
+  ")",
+  sep = ""
+)
+
+
+# Ensure dimensions match
+
+dim(textMatrix) <- dim(
+  moduleTraitCor
+)
+
+
+cat("Module-trait heatmap values prepared.\n")
+
+
+```
+
+# 22. Module-Trait Heatmap
+
+The heatmap summarizes the relationship between WGCNA modules and tumor
+status.
+
+Positive correlations indicate higher module eigengene expression in Tumor
+samples, whereas negative correlations indicate lower module eigengene
+expression in Tumor samples.
+
+
+
+```{r module_trait_heatmap,fig.width=16, fig.height=16,dpi=100,out.width="1600px",out.height="1600px"}
+
+
+# ============================================================
+# Module-Trait Relationship Heatmap
+# ============================================================
+# Save high-resolution heatmap
+png(
+  filename = "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/figures/wgcna/module_trait_heatmap_tumor_vs_adj.png",
+  width = 2700,
+  height = 2400,
+  res = 150
+)
+
+# IMPORTANT:
+# Large left margin for complete module names
+par(
+  mar = c(6, 18, 5, 4),
+  xpd = NA
+)
+
+# Module-Trait Relationship Heatmap
+labeledHeatmap(
+  Matrix = moduleTraitCor,
+
+  xLabels = colnames(traits_num),
+
+  # Complete module names
+  yLabels = colnames(MEs),
+  ySymbols = colnames(MEs),
+
+  colorLabels = FALSE,
+  colors = blueWhiteRed(50),
+
+  textMatrix = textMatrix,
+
+  # Prevent WGCNA from resetting the margins
+  setStdMargins = FALSE,
+
+  # Larger numbers inside the heatmap
+  cex.text = 1.4,
+
+  # Larger axis text
+  cex.lab = 1.3,
+  cex.axis = 1.2,
+
+  zlim = c(-1, 1),
+
+  main = "Module-Trait Relationships"
+)
+
+dev.off()
+
+# Restore normal graphics settings
+par(
+  mar = c(5, 4, 4, 2) + 0.1,
+  xpd = FALSE
+)
+```
+
+# 23. Calculate Module Membership and Gene Significance
+
+Two important measures are calculated for every gene:
+
+Module Membership (MM)
+
+Module Membership represents the correlation between an individual gene's
+expression and the eigengene of its corresponding module.
+
+A high absolute MM indicates that the gene is strongly representative of its
+module.
+
+Gene Significance (GS)
+
+Gene Significance represents the correlation between an individual gene's
+expression and the Tumor trait.
+
+A high absolute GS indicates a strong association between the gene and tumor
+status.
+
+
+
+```{r}
+
+# Store all gene names
+
+all_genes <- colnames(
+  datExpr
+)
+
+
+# Create empty result table
+
+allModulesTable <- data.frame()
+
+
+# Calculate MM and GS for every module
+
+for (module in colnames(MEs)) {
+  
+  
+  # Extract module color
+  
+  module_color <- gsub(
+    "ME",
+    "",
+    module
+  )
+  
+  
+  # Identify genes belonging to this module
+  
+  inModule <- moduleColors ==
+    module_color
+  
+  
+  # Extract gene names
+  
+  modGenes <- all_genes[
+    inModule
+  ]
+  
+  
+  # Calculate Module Membership
+  
+  MM <- cor(
+    datExpr[
+      ,
+      inModule,
+      drop = FALSE
+    ],
+    MEs[
+      ,
+      module
+    ],
+    use = "p"
+  )
+  
+  
+  # Calculate MM p-values
+  
+  MM_pval <- corPvalueStudent(
+    MM,
+    nrow(datExpr)
+  )
+  
+  
+  # Calculate Gene Significance
+  
+  GS <- cor(
+    datExpr[
+      ,
+      inModule,
+      drop = FALSE
+    ],
+    traits_num$Tumor,
+    use = "p"
+  )
+  
+  
+  # Calculate GS p-values
+  
+  GS_pval <- corPvalueStudent(
+    GS,
+    nrow(datExpr)
+  )
+  
+  
+  # Create module-specific result table
+  
+  df <- data.frame(
+    Gene = modGenes,
+    Module = module_color,
+    MM = as.vector(MM),
+    MM_pval = as.vector(MM_pval),
+    GS_Tumor = as.vector(GS),
+    GS_pval = as.vector(GS_pval)
+  )
+  
+  
+  # Combine results
+  
+  allModulesTable <- rbind(
+    allModulesTable,
+    df
+  )
+  
+}
+
+
+# Display number of evaluated genes
+
+cat("Total genes evaluated for MM and GS:\n")
+
+print(
+  nrow(allModulesTable)
+)
+
+
+# Display column names
+
+cat("\nColumns in MM/GS table:\n")
+
+print(
+  colnames(allModulesTable)
+)
+
+
+```
+
+
+# 24. Identify Significant Modules
+
+Modules are considered significantly associated with Tumor status when both of
+the following criteria are satisfied:
+
+Absolute module-trait correlation > 0.5
+Module-trait p-value < 0.05
+
+These thresholds are used to identify modules with relatively strong and
+statistically significant associations with pancreatic cancer status.
+
+
+```{r}
+
+# Identify significant modules
+
+sigModules <- rownames(
+  moduleTraitCor
+)[
+  abs(
+    moduleTraitCor[
+      ,
+      "Tumor"
+    ] 
+  ) > 0.5 &
+  moduleTraitPvalue[
+    ,
+    "Tumor"
+  ] < 0.05
+]
+
+
+# Display significant modules
+
+cat("Significant modules:\n")
+
+print(
+  sigModules
+)
+
+
+# Display number of significant modules
+
+cat("\nNumber of significant modules:\n")
+
+print(
+  length(sigModules)
+)
+
+
+```
+
+
+# 25. Add Significant Module Information to Gene Table
+
+Each gene is labeled according to whether it belongs to one of the
+significant modules identified above.
+
+
+
+
+```{r}
+
+# Identify genes belonging to significant modules
+
+allModulesTable$SignificantModule <-
+  allModulesTable$Module %in%
+  gsub(
+    "ME",
+    "",
+    sigModules
+  )
+
+
+# Count genes in significant modules
+
+cat(
+  "Number of genes belonging to significant modules:\n"
+)
+
+print(
+  sum(
+    allModulesTable$SignificantModule
+  )
+)
+
+
+```
+
+# 26. Extract Genes From Significant Modules
+
+Only genes belonging to significant modules are retained for downstream hub
+gene identification.
+
+
+
+```{r}
+
+# Extract genes from significant modules
+
+significantModuleGenes <-
+  allModulesTable %>%
+  filter(
+    SignificantModule == TRUE
+  )
+
+
+# Display number of genes
+
+cat("Number of genes in significant modules:\n")
+
+print(
+  nrow(
+    significantModuleGenes
+  )
+)
+
+
+# Display genes per module
+
+cat("\nGenes per significant module:\n")
+
+print(
+  table(
+    significantModuleGenes$Module
+  )
+)
+
+
+```
+
+# 27. Identify Hub Genes
+
+Hub genes are identified using three criteria:
+
+The gene must belong to a significant module.
+Absolute Module Membership (MM) must be greater than 0.8.
+Absolute Gene Significance (GS) must be greater than 0.2.
+
+These criteria identify genes that are strongly representative of their module
+and are also associated with tumor status.
+
+
+
+```{r}
+
+# Identify hub genes
+
+hubGenesTable <-
+  allModulesTable %>%
+  filter(
+    SignificantModule == TRUE,
+    abs(MM) > 0.8,
+    abs(GS_Tumor) > 0.2
+  )
+
+
+# Display number of hub genes
+
+cat("Number of hub genes:\n")
+
+print(
+  nrow(
+    hubGenesTable
+  )
+)
+
+
+# Display hub gene names
+
+cat("\nHub genes:\n")
+
+print(
+  hubGenesTable$Gene
+)
+
+
+
+```
+
+# 28. Sort Hub Genes
+
+Hub genes are ranked according to:
+
+Absolute Module Membership
+Absolute Gene Significance
+
+Genes with higher absolute MM and GS values are placed toward the top.
+
+
+```{r}
+
+# Sort hub genes
+
+hubGenesTable <-
+  hubGenesTable %>%
+  arrange(
+    desc(abs(MM)),
+    desc(abs(GS_Tumor))
+  )
+
+
+# Display top 20 hub genes
+
+cat("Top hub genes:\n")
+
+print(
+  head(
+    hubGenesTable,
+    20
+  )
+)
+
+
+```
+
+# 29. Save All Module Membership and Gene Significance Results
+
+The complete MM and GS table is saved as a CSV file.
+
+This file contains the module assignment, MM, MM p-value, GS, GS p-value, and
+significant-module status for all analyzed genes.
+
+
+```{r}
+
+# Save all MM and GS results
+
+write.csv(
+  allModulesTable,
+  "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/results/wgcna/WGCNA_all_genes_MM_GS.csv",
+  row.names = FALSE
+)
+
+
+cat("Saved:\n")
+cat("WGCNA_all_genes_MM_GS.csv\n")
+
+
+```
+
+
+# 30. Save Hub Genes
+
+The identified hub genes are saved for downstream analysis such as DEG
+intersection, enrichment analysis, STRING network analysis, and biomarker
+selection.
+
+
+```{r}
+
+# Save hub gene table
+
+write.csv(
+  hubGenesTable,
+  "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/results/wgcna/WGCNA_hub_genes.csv",
+  row.names = FALSE
+)
+
+
+cat("Saved:\n")
+cat("WGCNA_hub_genes.csv\n")
+
+
+```
+
+# 31. Save Significant Modules
+
+The names of significant modules are saved as a text file.
+
+
+
+```{r}
+
+# Save significant module names
+
+writeLines(
+  sigModules,
+  "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/results/wgcna/WGCNA_significant_modules.txt"
+)
+
+
+cat("Saved:\n")
+cat("WGCNA_significant_modules.txt\n")
+
+
+```
+
+
+# 32. Save Gene-Module Mapping
+
+A gene-to-module mapping table is generated.
+
+This file allows each gene to be linked to its corresponding WGCNA module.
+
+
+```{r}
+
+# Create gene-module mapping
+
+gene_module_mapping <- data.frame(
+  Gene = all_genes,
+  Module = moduleColors
+)
+
+
+# Save mapping
+
+write.csv(
+  gene_module_mapping,
+  "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/results/wgcna/WGCNA_gene_module_mapping.csv",
+  row.names = FALSE
+)
+
+
+cat("Saved:\n")
+cat("WGCNA_gene_module_mapping.csv\n")
+
+
+```
+
+# 33. Final WGCNA Summary
+
+The final section summarizes the major results of the WGCNA analysis,
+including the number of genes, samples, modules, significant modules,
+significant-module genes, and hub genes.
+
+
+```{r}
+
+cat("\n")
+cat("============================================================\n")
+cat("                 WGCNA FINAL SUMMARY\n")
+cat("============================================================\n")
+
+
+# Original expression dimensions
+
+cat("\nOriginal expression dimensions:\n")
+
+print(
+  dim(expr_mat)
+)
+
+
+# Final WGCNA expression dimensions
+
+cat("\nFinal WGCNA expression dimensions:\n")
+
+print(
+  dim(datExpr)
+)
+
+
+# Number of WGCNA samples
+
+cat("\nNumber of WGCNA samples:\n")
+
+print(
+  nrow(datExpr)
+)
+
+
+# Number of WGCNA genes
+
+cat("\nNumber of WGCNA genes:\n")
+
+print(
+  ncol(datExpr)
+)
+
+
+# Selected soft-threshold power
+
+cat("\nSelected soft-threshold power:\n")
+
+print(
+  soft_power
+)
+
+
+# Number of modules
+
+cat("\nNumber of modules:\n")
+
+print(
+  length(
+    unique(moduleColors)
+  )
+)
+
+
+# Significant modules
+
+cat("\nSignificant modules:\n")
+
+print(
+  sigModules
+)
+
+
+# Number of significant modules
+
+cat("\nNumber of significant modules:\n")
+
+print(
+  length(sigModules)
+)
+
+
+# Number of genes in significant modules
+
+cat("\nNumber of genes in significant modules:\n")
+
+print(
+  nrow(
+    significantModuleGenes
+  )
+)
+
+
+# Number of hub genes
+
+cat("\nNumber of hub genes:\n")
+
+print(
+  nrow(
+    hubGenesTable
+  )
+)
+
+
+cat("\n============================================================\n")
+cat("        WGCNA analysis completed successfully.\n")
+cat("============================================================\n")
+
+
+
+```
+
+
+# 34. Interpretation of the WGCNA Workflow
+
+The WGCNA analysis follows a structured workflow in which highly variable genes
+are first retained, followed by removal of Normal samples from the network
+construction.
+
+The resulting expression matrix is used to construct a signed weighted
+co-expression network. Genes exhibiting similar expression patterns are
+grouped into modules.
+
+Module eigengenes are then correlated with the Tumor trait to identify modules
+associated with pancreatic cancer status.
+
+Within significant modules, genes with high Module Membership and Gene
+Significance are identified as candidate hub genes.
+
+These hub genes can subsequently be integrated with differential expression
+results and other downstream analyses.
+
+The overall analytical strategy can therefore be summarized as:
+
+Normalized expression data
+
+↓
+
+Variance filtering
+
+↓
+
+Tumor + adjacent non-tumor samples
+
+↓
+
+WGCNA quality control
+
+↓
+
+Sample clustering + PCA
+
+↓
+
+Soft-threshold power selection
+
+↓
+
+Signed co-expression network
+
+↓
+
+Module identification
+
+↓
+
+Module-trait correlation
+
+↓
+
+Significant modules
+
+↓
+
+Module Membership + Gene Significance
+
+↓
+
+Hub genes
+
+↓
+
+Integration with DEG / enrichment / machine-learning analyses
+

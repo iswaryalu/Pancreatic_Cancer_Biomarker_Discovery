@@ -1,0 +1,754 @@
+---
+title: "LASSO-Based Biomarker Selection for Pancreatic Cancer"
+author: "Iswarya L U"
+date: "2026-02-22"
+output: html_document
+---
+
+```{r}
+rm(list = ls())
+
+options(stringsAsFactors = FALSE)
+
+set.seed(123)
+
+```
+
+## Introduction
+
+This analysis performs Least Absolute Shrinkage and Selection Operator (LASSO) regression to identify potential biomarkers that distinguish pancreatic tumor samples from adjacent non-tumor samples.
+
+The input genes are obtained from the overlap between:
+
+Differentially expressed genes (DEGs)
+WGCNA hub genes
+
+The workflow includes:
+
+Loading normalized gene expression data.
+Loading the overlapping DEG and WGCNA hub gene list.
+Selecting tumor and adjacent non-tumor samples.
+Preparing the machine learning feature matrix.
+Performing LASSO logistic regression.
+Selecting genes at lambda.min.
+Extracting LASSO coefficients.
+Generating coefficient path and cross-validation plots.
+
+#Load libraries
+
+```{r}
+library(glmnet)
+library(ggplot2)
+
+```
+The glmnet package is used to perform LASSO regression.
+
+The ggplot2 package can be used for visualization.
+
+## Load data
+
+
+```{r}
+expr <- read.csv(
+  "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/data/normalized_expression_matrix.csv",
+  row.names = 1,
+  check.names = FALSE
+)
+
+genes <- read.delim(
+  "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/results/integration of deg and wgcna/Hub_DEG_overlap_genes.csv",
+  header = TRUE,
+  stringsAsFactors = FALSE,
+  sep = ","
+)
+
+meta <- read.csv(
+  "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/data/meta_clean.csv"
+)
+
+```
+The analysis uses:
+
+A normalized gene expression matrix.
+A list of genes overlapping between DEG and WGCNA hub gene analysis.
+Sample metadata containing tissue information.
+
+#Prepare the Gene List
+
+The first column of the gene file is extracted and duplicate genes are removed.
+```{r}
+gene_list <- unique(genes[[1]])
+
+cat("Total genes loaded:", length(gene_list), "\n")
+
+head(gene_list)
+
+```
+#Prepare the Expression Matrix
+
+Only genes present in the overlap gene list are retained.
+
+The expression matrix is then transposed because machine learning models require:
+
+Samples as rows.
+Genes as columns.
+
+
+
+
+```{r}
+expr_sub <- expr[
+  rownames(expr) %in% gene_list,
+  ,
+  drop = FALSE
+]
+
+expr_t <- as.data.frame(
+  t(expr_sub)
+)
+
+```
+
+#Add Sample IDs
+
+Sample names are standardized before merging with metadata.
+
+
+
+
+```{r}
+expr_t$SampleID <- gsub(
+  "_.*",
+  "",
+  rownames(expr_t)
+)
+
+```
+
+#Merge Expression Data and Metadata
+
+The gene expression matrix is merged with the metadata using the sample identifier.
+
+
+```{r}
+merged_data <- merge(
+  meta,
+  expr_t,
+  by = "SampleID"
+)
+```
+
+#Select Tumor and Adjacent Non-Tumor Samples
+
+Only the two groups relevant to the classification analysis are retained.
+
+```{r}
+merged_data <- merged_data[
+  merged_data$tissue %in%
+    c("Tumor", "adjacent_non_tumor"),
+]
+
+```
+
+The classification task is therefore:
+
+Tumor = 1
+Adjacent non-tumor = 0
+
+#Feature Selection and Dataset Preparation
+
+Before building the LASSO model, the overlap between the requested gene list and genes available in the merged dataset is checked.
+
+
+```{r}
+valid_genes <- intersect(
+  gene_list,
+  colnames(merged_data)
+)
+
+cat("Genes requested:", length(gene_list), "\n")
+
+cat("Genes found:", length(valid_genes), "\n")
+
+```
+
+
+
+#Create the machine learning dataset.
+
+
+```{r}
+ml_data <- merged_data[
+  ,
+  c("tissue", valid_genes),
+  drop = FALSE
+]
+
+```
+
+
+#Encode the Outcome Variable
+
+The tissue type is converted into a binary outcome.
+
+
+```{r}
+ml_data$tissue <- factor(
+  ml_data$tissue
+)
+
+y <- ifelse(
+  ml_data$tissue == "Tumor",
+  1,
+  0
+)
+
+table(y)
+
+```
+
+#Create Predictor Matrix
+
+The gene expression data are converted into a numerical matrix.
+
+
+```{r}
+x <- as.matrix(
+  ml_data[, valid_genes]
+)
+
+x <- apply(
+  x,
+  2,
+  as.numeric
+)
+
+```
+
+#Scale Gene Expression
+
+The gene expression values are standardized before LASSO analysis.
+
+
+
+```{r}
+x <- scale(x)
+
+#missing values are removed 
+complete_idx <- complete.cases(x)
+
+x <- x[
+  complete_idx,
+  ,
+  drop = FALSE
+]
+
+y <- y[complete_idx]
+
+cat("Final samples:", nrow(x), "\n")
+
+cat("Final genes:", ncol(x), "\n")
+```
+#LASSO Logistic Regression
+
+LASSO regression is performed using the glmnet package.
+
+The analysis uses:
+
+Binomial logistic regression.
+LASSO penalty (alpha = 1).
+10-fold cross-validation.
+
+
+
+
+```{r}
+cvfit <- cv.glmnet(
+  x,
+  y,
+  family = "binomial",
+  alpha = 1,
+  nfolds = 10,
+  standardize = FALSE
+)
+
+fit <- glmnet(
+  x,
+  y,
+  family = "binomial",
+  alpha = 1,
+  standardize = FALSE
+)
+
+
+cat(
+  "Lambda.min:",
+  cvfit$lambda.min,
+  "\n"
+)
+
+cat(
+  "Lambda.1se:",
+  cvfit$lambda.1se,
+  "\n"
+)
+
+```
+
+#Interpretation of Lambda Values
+
+lambda.min is the value of lambda that produces the minimum cross-validation error.
+
+lambda.1se is the largest lambda within one standard error of the minimum cross-validation error.
+
+The lambda.min model usually selects more genes, whereas the lambda.1se model generally produces a more parsimonious model.
+
+
+#Extract LASSO-Selected Genes
+
+Genes with non-zero coefficients at lambda.min are identified.
+
+
+
+```{r}
+coef_lasso <- coef(
+  cvfit,
+  s = "lambda.min"
+)
+
+lasso_genes <- rownames(coef_lasso)[
+  coef_lasso[, 1] != 0
+]
+
+lasso_genes <- setdiff(
+  lasso_genes,
+  "(Intercept)"
+)
+
+cat(
+  "Selected genes:",
+  length(lasso_genes),
+  "\n"
+)
+
+lasso_genes
+```
+
+
+
+
+
+
+
+
+```{r}
+
+write.csv(
+  lasso_genes,
+  "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/results/LASSO_selected_biomarkers.csv",
+  row.names = FALSE
+)
+
+```
+
+
+#Extract LASSO Coefficients
+
+The coefficients of the selected genes are extracted.
+
+
+```{r}
+coef_df <- data.frame(
+  Gene = lasso_genes,
+  Coefficient = coef_lasso[
+    lasso_genes,
+    1
+  ]
+)
+
+coef_df
+#write.csv(coef_df, "~/work/r_project_ishu/ml/lasso/results/LASSO_coefficients.csv", row.names = FALSE)
+```
+
+A positive coefficient indicates that higher expression contributes toward classification as a tumor sample.
+
+A negative coefficient indicates that higher expression contributes toward classification as an adjacent non-tumor sample.
+
+#LASSO Coefficient Path
+
+The coefficient path shows how the regression coefficients change as the regularization parameter lambda changes.
+
+
+```{r}
+coef_mat <- as.matrix(
+  fit$beta
+)
+
+log_lambda <- log(
+  fit$lambda
+)
+
+common_len <- min(
+  ncol(coef_mat),
+  length(log_lambda)
+)
+
+coef_mat <- coef_mat[
+  ,
+  1:common_len,
+  drop = FALSE
+]
+
+log_lambda <- log_lambda[
+  1:common_len
+]
+
+df_vals <- fit$df[
+  1:common_len
+]
+
+idx <- order(
+  log_lambda,
+  decreasing = TRUE
+)
+
+matplot(
+  log_lambda[idx],
+  t(coef_mat[, idx]),
+  type = "l",
+  lty = 1,
+  lwd = 2,
+  xlab = "Log Lambda",
+  ylab = "Coefficients",
+  main = "LASSO Coefficient Profiles"
+)
+
+pretty_ticks <- pretty(
+  log_lambda[idx]
+)
+
+tick_idx <- sapply(
+  pretty_ticks,
+  function(v) which.min(abs(log_lambda - v))
+)
+
+top_numbers <- df_vals[tick_idx]
+
+axis(
+  3,
+  at = pretty_ticks,
+  labels = top_numbers,
+  tick = FALSE,
+  line = -0.5,
+  cex.axis = 1.2
+)
+```
+
+
+#save coefficient path
+
+
+
+
+```{r}
+png(
+  "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/figures/LASSO_Coefficient_Path.png",
+  width = 2400,
+  height = 1800,
+  res = 300
+)
+
+matplot(
+  log_lambda[idx],
+  t(coef_mat[, idx]),
+  type = "l",
+  lty = 1,
+  lwd = 2,
+  xlab = "Log Lambda",
+  ylab = "Coefficients",
+  main = "LASSO Coefficient Profiles"
+)
+
+axis(
+  3,
+  at = pretty_ticks,
+  labels = top_numbers,
+  tick = FALSE,
+  line = -0.5,
+  cex.axis = 1.2
+)
+
+dev.off()
+
+```
+
+
+#LASSO Cross-Validation Plot
+
+The cross-validation plot shows the binomial deviance across different lambda value.
+
+
+```{r}
+log_lambda_cv <- log(
+  cvfit$lambda
+)
+
+idx_cv <- order(
+  log_lambda_cv,
+  decreasing = TRUE
+)
+
+plot(
+  log_lambda_cv[idx_cv],
+  cvfit$cvm[idx_cv],
+  type = "b",
+  pch = 16,
+  col = "red",
+  xlab = "Log(lambda)",
+  ylab = "Binomial Deviance",
+  main = "LASSO Cross-Validation"
+)
+
+arrows(
+  log_lambda_cv[idx_cv],
+  cvfit$cvm[idx_cv] -
+    cvfit$cvsd[idx_cv],
+  log_lambda_cv[idx_cv],
+  cvfit$cvm[idx_cv] +
+    cvfit$cvsd[idx_cv],
+  angle = 90,
+  code = 3,
+  length = 0.03,
+  col = "grey60"
+)
+
+abline(
+  v = log(cvfit$lambda.min),
+  lty = 2
+)
+
+abline(
+  v = log(cvfit$lambda.1se),
+  lty = 2
+)
+
+pretty_ticks_cv <- pretty(
+  log_lambda_cv[idx_cv]
+)
+
+tick_idx_cv <- sapply(
+  pretty_ticks_cv,
+  function(v) which.min(
+    abs(log_lambda_cv - v)
+  )
+)
+
+top_numbers_cv <- cvfit$nzero[
+  tick_idx_cv
+]
+
+axis(
+  3,
+  at = pretty_ticks_cv,
+  labels = top_numbers_cv,
+  tick = FALSE,
+  line = -0.5,
+  cex.axis = 1.2
+)
+```
+#The two vertical lines represent:
+
+lambda.min: minimum cross-validation error.
+lambda.1se: a more conservative model within one standard error of the minimum.
+
+
+#Save Cross-Validation Plot
+
+
+```{r}
+png(
+  "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/figures/LASSO_CV_Plot.png",
+  width = 2000,
+  height = 1500,
+  res = 300
+)
+
+plot(
+  log_lambda_cv[idx_cv],
+  cvfit$cvm[idx_cv],
+  type = "b",
+  pch = 16,
+  col = "red",
+  xlab = "Log(lambda)",
+  ylab = "Binomial Deviance",
+  main = "LASSO Cross-Validation"
+)
+
+arrows(
+  log_lambda_cv[idx_cv],
+  cvfit$cvm[idx_cv] -
+    cvfit$cvsd[idx_cv],
+  log_lambda_cv[idx_cv],
+  cvfit$cvm[idx_cv] +
+    cvfit$cvsd[idx_cv],
+  angle = 90,
+  code = 3,
+  length = 0.03,
+  col = "grey60"
+)
+
+abline(
+  v = log(cvfit$lambda.min),
+  lty = 2
+)
+
+abline(
+  v = log(cvfit$lambda.1se),
+  lty = 2
+)
+
+axis(
+  3,
+  at = pretty_ticks_cv,
+  labels = top_numbers_cv,
+  tick = FALSE,
+  line = -0.5,
+  cex.axis = 1.2
+)
+
+dev.off()
+```
+
+
+#LASSO Feature Count
+
+This plot shows the number of genes with non-zero coefficients at different lambda values.
+
+
+
+```{r}
+plot(
+  log_lambda_cv[idx_cv],
+  cvfit$nzero[idx_cv],
+  type = "l",
+  lwd = 3,
+  xlab = "Log(lambda)",
+  ylab = "Number of Features",
+  main = "LASSO Sparsity Profile"
+)
+
+points(
+  log_lambda_cv[idx_cv],
+  cvfit$nzero[idx_cv],
+  pch = 16
+)
+
+abline(
+  v = log(cvfit$lambda.min),
+  lty = 2
+)
+
+abline(
+  v = log(cvfit$lambda.1se),
+  lty = 2
+)
+
+```
+
+#Save Feature Count Plot
+
+
+```{r}
+png(
+  "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/figures/LASSO_Feature_Count.png",
+  width = 2000,
+  height = 1500,
+  res = 300
+)
+
+plot(
+  log_lambda_cv[idx_cv],
+  cvfit$nzero[idx_cv],
+  type = "l",
+  lwd = 3,
+  xlab = "Log(lambda)",
+  ylab = "Number of Features",
+  main = "LASSO Sparsity Profile"
+)
+
+points(
+  log_lambda_cv[idx_cv],
+  cvfit$nzero[idx_cv],
+  pch = 16
+)
+
+abline(
+  v = log(cvfit$lambda.min),
+  lty = 2
+)
+
+abline(
+  v = log(cvfit$lambda.1se),
+  lty = 2
+)
+
+dev.off()
+```
+
+
+
+#final result
+
+
+```{r}
+cat(
+  "Number of input genes:",
+  length(gene_list),
+  "\n"
+)
+
+cat(
+  "Number of genes available for LASSO:",
+  length(valid_genes),
+  "\n"
+)
+
+cat(
+  "Number of samples:",
+  nrow(x),
+  "\n"
+)
+
+cat(
+  "Number of LASSO-selected genes:",
+  length(lasso_genes),
+  "\n"
+)
+
+cat(
+  "Lambda.min:",
+  cvfit$lambda.min,
+  "\n"
+)
+
+cat(
+  "Lambda.1se:",
+  cvfit$lambda.1se,
+  "\n"
+)
+
+cat(
+  "log(lambda.min):",
+  log(cvfit$lambda.min),
+  "\n"
+)
+
+cat(
+  "log(lambda.1se):",
+  log(cvfit$lambda.1se),
+  "\n"
+)
+
+cat("Selected_biomarkers:",coef_df$Gene,"\n")
+```
+This analysis used LASSO logistic regression to select a reduced set of candidate biomarkers from the genes shared between the differential expression analysis and WGCNA hub gene analysis. The final biomarkers were selected based on non-zero coefficients at the cross-validated lambda.min value.

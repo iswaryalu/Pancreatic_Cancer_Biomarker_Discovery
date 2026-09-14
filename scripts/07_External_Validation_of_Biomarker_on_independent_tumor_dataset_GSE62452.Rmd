@@ -1,0 +1,782 @@
+---
+title: External validation of identified biomarker efficiency using independent tumor
+  dataset GSE62452
+author: "Iswarya L U"
+date: "2026-02-24"
+output: html_document
+---
+# 1. Introduction
+
+This analysis evaluates the diagnostic performance of the final biomarker genes identified from the pancreatic cancer discovery analysis using the independent **GSE62452** dataset.
+
+GSE62452 contains gene-expression profiles from **69 pancreatic ductal adenocarcinoma (PDAC) tumor tissues and 61 adjacent non-tumor tissues**, generated using the Affymetrix Human Gene 1.0 ST Array (GPL6244).
+
+The validation analysis consists of:
+
+1. Extraction of the final biomarker genes.
+2. Preparation of the independent validation dataset.
+3. Comparison of gene expression between tumor and control tissues.
+4. Evaluation of individual biomarker performance using ROC analysis.
+5. Construction of a multi-gene logistic regression model.
+6. Evaluation of the combined panel using ROC analysis.
+7. Estimation of confidence intervals for the panel AUC.
+8. Identification of the optimal classification threshold.
+9. Generation of a risk-score dataset.
+10. Visualization of individual-gene AUC values.
+
+---
+
+# 2. Dataset Information
+
+## GSE62452
+
+**GEO accession:** GSE62452
+
+**Title:** Microarray gene-expression profiles of 69 pancreatic tumors and 61 adjacent non-tumor tissue from patients with pancreatic ductal adenocarcinoma.
+
+**Organism:** *Homo sapiens*
+
+**Platform:** GPL6244 – Affymetrix Human Gene 1.0 ST Array
+
+**Samples:** 130 total samples
+
+* 69 pancreatic tumor samples
+* 61 adjacent non-tumor samples
+
+The dataset was generated to investigate gene-expression differences between pancreatic tumor and adjacent non-tumor tissues in PDAC.
+
+---
+
+# 3. Load Required Libraries
+
+```{r setup, message=FALSE, warning=FALSE}
+
+rm(list = ls())
+
+graphics.off()
+
+set.seed(123)
+
+# Required packages
+library(pROC)
+library(ggpubr)
+library(dplyr)
+library(ggplot2)
+
+```
+
+A fixed random seed is used to improve reproducibility, particularly for bootstrap-based confidence interval estimation.
+
+---
+
+# 4. Define the Final Biomarker Genes
+
+The final biomarker genes are read from the results file generated during the biomarker selection stage.
+
+```{r biomarkers}
+
+genes_read <- read.csv(
+  "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/results/Common_Biomarker_Genes_All_3_ml.csv",
+  check.names = FALSE
+)
+
+final_genes <- genes_read$Gene
+
+cat("Final biomarker genes:\n")
+print(final_genes)
+
+```
+
+The genes contained in this file represent the final biomarker candidates selected from the discovery analysis.
+
+---
+
+# 5. Load Expression Matrix and Metadata
+
+The normalized expression matrix and corresponding metadata for GSE62452 are loaded.
+
+```{r load-data}
+
+expr <- read.csv(
+  "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/data/GSE62452_RAW_normalized_expression_matrix_pancreas-tumor-val.csv",
+  row.names = 1,
+  check.names = FALSE
+)
+
+meta <- read.csv(
+  "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/data/GSE62452_RAW_metadata_pancreas_tissue_only--tumor-val.csv",
+  row.names = 1,
+  check.names = FALSE
+)
+
+cat("Expression matrix dimensions:\n")
+print(dim(expr))
+
+cat("\nMetadata dimensions:\n")
+print(dim(meta))
+
+```
+
+The expression matrix contains genes as rows and samples as columns, whereas the metadata contains sample-level information.
+
+---
+
+# 6. Match Expression Data With Metadata
+
+Only samples that are present in the metadata are retained from the expression matrix.
+
+```{r match-samples}
+
+# Check whether metadata samples are present in expression matrix
+all(rownames(meta) %in% colnames(expr))
+
+# Reorder expression matrix according to metadata
+expr <- expr[, rownames(meta)]
+
+# Confirm matching sample order
+all(colnames(expr) == rownames(meta))
+
+```
+
+This step ensures that the expression measurements and phenotype information correspond to the same samples and are maintained in the same order.
+
+---
+
+# 7. Define Tumor and Control Groups
+
+The original tissue annotation is converted into a binary classification variable:
+
+* **Tumor** = pancreatic tumor tissue
+* **Control** = adjacent non-tumor tissue
+
+```{r define-groups}
+
+meta$group <- factor(
+  ifelse(meta$tissue == "tumor", "Tumor", "Control"),
+  levels = c("Control", "Tumor")
+)
+
+# Display group counts
+table(meta$group)
+
+```
+
+## Group Distribution
+
+```{r group-distribution}
+
+group_counts <- table(meta$group)
+
+group_counts
+
+```
+
+The expected distribution is approximately:
+
+* 61 Control samples
+* 69 Tumor samples
+
+---
+
+# 8. Extract Biomarker Genes Present in the Validation Dataset
+
+Only genes that are both present in the final biomarker list and available in the GSE62452 expression matrix are retained.
+
+```{r extract-biomarkers}
+
+common_genes <- intersect(
+  final_genes,
+  rownames(expr)
+)
+
+cat("Final genes identified:", length(final_genes), "\n")
+cat("Genes available in GSE62452:", length(common_genes), "\n\n")
+
+cat("Genes used for validation:\n")
+print(common_genes)
+
+```
+
+The intersection step prevents errors caused by biomarker genes that may not be represented in the validation expression matrix.
+
+---
+
+# 9. Prepare the Biomarker Expression Dataset
+
+The selected biomarker expression matrix is transposed so that samples are represented as rows and genes as columns.
+
+```{r prepare-expression}
+
+expr_biomarker <- t(
+  expr[common_genes, , drop = FALSE]
+)
+
+expr_biomarker <- as.data.frame(
+  expr_biomarker,
+  check.names = FALSE
+)
+
+# Combine phenotype and expression data
+df <- data.frame(
+  group = meta$group,
+  expr_biomarker,
+  check.names = FALSE
+)
+
+# Display dimensions
+dim(df)
+
+# Preview data
+head(df)
+
+```
+
+The resulting dataset contains one row per sample and one column for each biomarker gene.
+
+---
+
+# 10. Check for Missing Values
+
+```{r missing-values}
+
+cat("Total missing values in validation dataset:",
+    sum(is.na(df)),
+    "\n")
+
+```
+
+The presence of missing values should be assessed before statistical modeling.
+
+---
+
+# 11. Expression Distribution of Individual Biomarkers
+
+Boxplots are generated to compare the expression levels of each biomarker between tumor and control tissues.
+
+A Wilcoxon rank-sum test is used to assess the difference between the two groups.
+
+```{r boxplots, fig.width=10, fig.height=7, message=FALSE, warning=FALSE}
+
+for (g in common_genes) {
+
+  p <- ggboxplot(
+    df,
+    x = "group",
+    y = g,
+    color = "group",
+    add = "jitter",
+    width = 0.65,
+    size = 0.8
+  ) +
+    stat_compare_means(
+      method = "wilcox.test"
+    ) +
+    labs(
+      title = paste("GSE62452 Tumor vs Control Expression:", g),
+      x = "Tissue Group",
+      y = "Expression"
+    ) +
+    theme_bw(base_size = 14) +
+    theme(
+      plot.title = element_text(
+        size = 16,
+        face = "bold"
+      ),
+      axis.title = element_text(
+        size = 14
+      ),
+      axis.text = element_text(
+        size = 12
+      ),
+      legend.position = "none"
+    )
+
+  print(p)
+}
+
+```
+
+These plots provide a visual assessment of the expression differences between tumor and adjacent non-tumor tissues.
+
+---
+
+# 12. Single-Gene ROC Analysis
+
+Receiver operating characteristic (ROC) analysis is performed separately for each biomarker.
+
+The area under the ROC curve (AUC) is used to quantify the ability of each individual gene to distinguish tumor from control samples.
+
+An AUC closer to 1 indicates stronger discriminatory performance, whereas an AUC of 0.5 indicates performance equivalent to random classification.
+
+```{r single-gene-roc, fig.width=9, fig.height=7}
+
+roc_table <- data.frame(
+  Gene = character(),
+  AUC = numeric(),
+  stringsAsFactors = FALSE
+)
+
+for (g in common_genes) {
+
+  roc_obj <- roc(
+    response = df$group,
+    predictor = df[, g],
+    levels = c("Control", "Tumor"),
+    direction = "<"
+  )
+
+  plot(
+    roc_obj,
+    lwd = 3,
+    main = paste("ROC Curve:", g),
+    print.auc = TRUE,
+    print.auc.cex = 1.2
+  )
+
+  roc_table <- rbind(
+    roc_table,
+    data.frame(
+      Gene = g,
+      AUC = as.numeric(auc(roc_obj))
+    )
+  )
+}
+
+```
+
+---
+
+# 13. Single-Gene AUC Results
+
+```{r single-gene-results}
+
+cat("Single-gene AUCs for GSE62452:\n\n")
+
+print(
+  roc_table
+)
+
+```
+
+The individual AUC values summarize the diagnostic discrimination achieved by each biomarker independently.
+
+---
+
+# 14. Save Single-Gene AUC Results
+
+```{r save-single-auc}
+
+write.csv(
+  roc_table,
+  "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/results/GSE62452_SingleGene_AUC-.csv",
+  row.names = FALSE
+)
+
+```
+
+---
+
+# 15. Multi-Gene Logistic Regression Model
+
+A logistic regression model is constructed using the available biomarker genes simultaneously.
+
+The model estimates the probability that each sample belongs to the tumor group based on the combined expression of the biomarker genes.
+
+```{r logistic-model}
+
+glm_model <- glm(
+  group ~ .,
+  data = df[, c("group", common_genes)],
+  family = binomial
+)
+
+summary(glm_model)
+
+```
+
+---
+
+# 16. Generate Predicted Tumor Probabilities
+
+```{r predicted-probability}
+
+pred <- predict(
+  glm_model,
+  type = "response"
+)
+
+head(pred)
+
+```
+
+The predicted probabilities represent the estimated probability of tumor classification for each sample.
+
+These probabilities are subsequently used as the combined biomarker panel score for ROC analysis.
+
+---
+
+# 17. Multi-Gene ROC Analysis
+
+The combined diagnostic performance of the biomarker panel is evaluated using ROC analysis.
+
+```{r panel-roc}
+
+roc_panel <- roc(
+  response = df$group,
+  predictor = pred,
+  levels = c("Control", "Tumor"),
+  direction = "<"
+)
+
+cat("Multi-gene panel AUC:",
+    as.numeric(auc(roc_panel)),
+    "\n")
+
+```
+
+---
+
+# 18. Plot Multi-Gene ROC Curve
+
+```{r panel-roc-plot, fig.width=9, fig.height=7}
+
+plot(
+  roc_panel,
+  lwd = 3,
+  main = "GSE62452 5-Gene Logistic Regression ROC",
+  print.auc = TRUE,
+  print.auc.cex = 1.2,
+  print.auc.y = 0.2
+)
+
+```
+
+The ROC curve evaluates the overall ability of the combined biomarker panel to discriminate between tumor and control tissues.
+
+---
+
+# 19. Save Multi-Gene ROC Plot
+
+```{r save-panel-roc}
+
+png(
+  "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/figures/GSE62452_Multigene_AUC_plot-.png",
+  width = 9,
+  height = 7,
+  units = "in",
+  res = 300
+)
+
+plot(
+  roc_panel,
+  lwd = 3,
+  main = "GSE62452 5-Gene Logistic ROC",
+  print.auc = TRUE,
+  print.auc.cex = 1.2,
+  print.auc.y = 0.2
+)
+
+dev.off()
+
+```
+
+---
+
+# 20. Extract and Save ROC Curve Coordinates
+
+The sensitivity and specificity values corresponding to the ROC curve are saved for subsequent visualization or reporting.
+
+```{r roc-coordinates}
+
+roc_df <- data.frame(
+  specificity = roc_panel$specificities,
+  sensitivity = roc_panel$sensitivities
+)
+
+head(roc_df)
+
+write.csv(
+  roc_df,
+  "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/results/GSE62452_Logistic_ROC_curve.csv",
+  row.names = FALSE
+)
+
+```
+
+---
+
+# 21. Generate Biomarker Risk Scores
+
+The predicted probability generated by the logistic regression model is stored as the biomarker panel risk score.
+
+```{r risk-score}
+
+df$risk_score <- pred
+
+head(
+  df[, c("group", common_genes, "risk_score")]
+)
+
+```
+
+The risk score represents the model-derived probability of tumor classification for each sample.
+
+---
+
+# 22. Save Risk Score Results
+
+```{r save-risk-score}
+
+write.csv(
+  df,
+  "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/results/GSE62452_Biomarker_RiskScore.csv",
+  row.names = FALSE
+)
+
+```
+
+---
+
+# 23. Confidence Interval for the Panel AUC
+
+Two confidence interval estimates are obtained for the combined panel AUC:
+
+1. The default DeLong method.
+2. A bootstrap-based confidence interval using 2,000 bootstrap replicates.
+
+```{r auc-confidence-interval}
+
+# DeLong confidence interval
+ci_auc <- ci.auc(
+  roc_panel
+)
+
+# Bootstrap confidence interval
+ci_auc_boot <- ci.auc(
+  roc_panel,
+  method = "bootstrap",
+  boot.n = 2000
+)
+
+cat("AUC:\n")
+print(auc(roc_panel))
+
+cat("\nDeLong 95% CI:\n")
+print(ci_auc)
+
+cat("\nBootstrap 95% CI:\n")
+print(ci_auc_boot)
+
+```
+
+The confidence intervals provide an estimate of the uncertainty surrounding the observed panel AUC.
+
+---
+
+# 24. Optimal Classification Threshold
+
+The threshold that provides the best combination of sensitivity and specificity is identified using the `"best"` criterion implemented in `pROC`.
+
+```{r optimal-threshold}
+
+coords_best <- coords(
+  roc_panel,
+  "best",
+  ret = c(
+    "threshold",
+    "sensitivity",
+    "specificity",
+    "ppv",
+    "npv"
+  )
+)
+
+cat("Best classification threshold and diagnostic metrics:\n\n")
+
+print(coords_best)
+
+```
+
+The resulting threshold can be used to classify samples according to the predicted probability generated by the logistic regression panel.
+
+---
+
+# 25. Arrange Biomarkers According to AUC
+
+The individual biomarkers are ranked according to their AUC values for visualization.
+
+```{r auc-ranking}
+
+roc_table$Gene <- factor(
+  roc_table$Gene,
+  levels = roc_table$Gene[
+    order(roc_table$AUC)
+  ]
+)
+
+roc_table
+
+```
+
+---
+
+# 26. Single-Gene AUC Bar Plot
+
+A horizontal bar plot is generated to compare the diagnostic performance of the individual biomarkers.
+
+```{r auc-barplot, fig.width=10, fig.height=7}
+
+p_auc <- ggplot(
+  roc_table,
+  aes(
+    x = Gene,
+    y = AUC,
+    fill = Gene
+  )
+) +
+
+  geom_bar(
+    stat = "identity",
+    width = 0.6
+  ) +
+
+  geom_text(
+    aes(
+      label = round(AUC, 3)
+    ),
+    hjust = -0.1,
+    size = 4
+  ) +
+
+  coord_flip() +
+
+  scale_y_continuous(
+    limits = c(0, 1),
+    expand = expansion(
+      mult = c(0, 0.08)
+    )
+  ) +
+
+  labs(
+    title = "Single-Gene AUCs in GSE62452",
+    x = "Biomarker Gene",
+    y = "Area Under the ROC Curve (AUC)"
+  ) +
+
+  theme_bw(
+    base_size = 14
+  ) +
+
+  theme(
+    legend.position = "none",
+    plot.title = element_text(
+      size = 16,
+      face = "bold"
+    ),
+    axis.title = element_text(
+      size = 14
+    ),
+    axis.text = element_text(
+      size = 12
+    )
+  )
+
+print(p_auc)
+
+```
+
+---
+
+# 27. Save Single-Gene AUC Plot
+
+```{r save-auc-barplot}
+
+ggsave(
+  "C:/Users/iswar/Downloads/pancreatic_cancer_biomarker_discovery/figures/GSE62452_SingleGene_AUC_plot.png",
+  plot = p_auc,
+  width = 9,
+  height = 7,
+  dpi = 300
+)
+
+```
+
+---
+
+# 28. Final Validation Summary
+
+```{r final-summary}
+
+panel_auc <- as.numeric(
+  auc(roc_panel)
+)
+
+cat("============================================\n")
+cat("GSE62452 BIOMARKER VALIDATION SUMMARY\n")
+cat("============================================\n\n")
+
+cat("Total samples:", nrow(df), "\n")
+cat("Control samples:",
+    sum(df$group == "Control"),
+    "\n")
+
+cat("Tumor samples:",
+    sum(df$group == "Tumor"),
+    "\n\n")
+
+cat("Genes evaluated:",
+    length(common_genes),
+    "\n")
+
+cat("Genes:\n")
+print(common_genes)
+
+cat("\nSingle-gene AUCs:\n")
+print(roc_table)
+
+cat("\nCombined panel AUC:",
+    round(panel_auc, 3),
+    "\n")
+
+cat("\nDeLong 95% CI:\n")
+print(ci_auc)
+
+cat("\nBootstrap 95% CI:\n")
+print(ci_auc_boot)
+
+cat("\nOptimal threshold metrics:\n")
+print(coords_best)
+
+cat("\n============================================\n")
+
+```
+
+# 29. Interpretation
+
+The GSE62452 dataset provides an independent tissue-level validation cohort containing pancreatic tumor and adjacent non-tumor samples.
+
+The individual biomarkers are first evaluated independently using ROC analysis. Their AUC values indicate the ability of each gene to discriminate between tumor and control tissues.
+
+A logistic regression model is then used to combine the expression information from the biomarker genes. The predicted probabilities from this model are treated as a combined biomarker score and evaluated using ROC analysis.
+
+The resulting panel AUC, confidence intervals, sensitivity, specificity, PPV, NPV, and optimal threshold provide a quantitative assessment of the diagnostic performance of the combined biomarker panel.
+
+The GSE62452 analysis therefore serves as an **external tissue validation step** for the biomarker candidates identified during the discovery phase.
+
+---
+
+# 30. Files Generated
+
+The analysis generates the following output files:
+
+### Results
+
+* `GSE62452_SingleGene_AUC.csv`
+* `GSE62452_Logistic_ROC_curve.csv`
+* `GSE62452_Biomarker_RiskScore.csv`
+
+### Figures
+
+* `GSE62452_Multigene_AUC_plot.png`
+* `GSE62452_SingleGene_AUC_plot.png`
+
