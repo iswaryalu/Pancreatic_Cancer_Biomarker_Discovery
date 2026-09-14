@@ -1,0 +1,10 @@
+# R temporary files
+.RData
+.RDataTmp
+.Rhistory
+.Rproj.user/
+
+# Large expression matrices
+data/normalized_expression_matrix.csv
+data/GSE62452_RAW_normalized_expression_matrix_pancreas-tumor-val.csv
+data/normalized_expression_matrix_GSE15932.csv
