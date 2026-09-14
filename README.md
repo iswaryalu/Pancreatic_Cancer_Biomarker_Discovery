@@ -48,6 +48,7 @@ The analysis was performed using publicly available Affymetrix microarray datase
 * Applied statistical filtering based on adjusted p-values and fold-change thresholds.
 * Identified significantly upregulated and downregulated genes.
 * Visualized results using volcano plots and heatmaps.
+  
 
 ### 3. Weighted Gene Co-expression Network Analysis (WGCNA)
 
@@ -121,6 +122,89 @@ The following five genes were consistently identified through machine learning-b
 The model demonstrated strong diagnostic performance and supports the feasibility of translating tumour-derived transcriptomic signatures into blood-based diagnostic applications.
 
 ---
+## Key Results & Visualizations
+
+### Overall Bioinformatics Workflow
+
+![Pancreatic Cancer Biomarker Discovery Workflow](figures/Workflow.png)
+
+The overall workflow integrates differential expression analysis, WGCNA, functional enrichment, machine learning-based feature selection, biomarker prioritization, and external validation.
+
+---
+
+### Differential Expression Analysis
+
+#### Volcano Plot
+
+![Differentially Expressed Genes Volcano Plot](figures/deg/DEG_Volcano_Plot.png)
+
+A total of **311 differentially expressed genes** were identified, including 193 upregulated and 118 downregulated genes.
+
+#### DEG Heatmap
+
+![Differentially Expressed Genes Heatmap](figures/deg/DEG_Heatmap.png)
+
+---
+
+### Weighted Gene Co-expression Network Analysis
+
+#### WGCNA Module-Trait Relationship
+
+![WGCNA Module Trait Heatmap](figures/wgcna/module_trait_heatmap_tumor_vs_adj.png)
+
+The module-trait analysis was used to identify co-expression modules associated with pancreatic cancer status.
+
+#### WGCNA Module Dendrogram
+
+![WGCNA Module Dendrogram](figures/wgcna/module_dendrogram_tumor_vs_adj.png)
+
+---
+
+### Machine Learning-Based Biomarker Selection
+
+#### LASSO Feature Selection
+
+![LASSO Coefficient Path](figures/LASSO_Coefficient_Path.png)
+
+LASSO regression was used to identify informative genes while reducing feature dimensionality.
+
+#### SVM-RFE Feature Selection
+
+![SVM-RFE Accuracy](figures/SVM_RFE_Accuracy.png)
+
+Support Vector Machine Recursive Feature Elimination was used as an independent feature-selection approach.
+
+#### Random Forest Feature Importance
+
+![Random Forest Feature Importance](figures/RF_top30_gini.png)
+
+Random Forest Gini importance was used to rank genes according to their contribution to classification.
+
+---
+
+### External Validation
+
+#### Tumour Tissue Validation
+
+![Tumour Validation ROC](figures/External_Validation_on_Tumor_GSE62452_Multigene_AUC_plot-.png)
+
+The final biomarker panel demonstrated strong diagnostic performance in the independent tumour validation cohort.
+
+#### Blood-Based Validation
+
+![Blood Validation ROC](figures/External_Validation_on_blood_GSE15932_multi_gene_ROC.png)
+
+The biomarker signature was further evaluated using an independent peripheral blood dataset to assess its potential for non-invasive pancreatic cancer detection.
+
+---
+
+### Final Five-Gene Biomarker Signature
+
+The final machine learning-based biomarker panel consisted of:
+
+**AHNAK2 · TRIM29 · SLC6A14 · ITGB4 · CTSE**
+
+These genes were prioritized through the integration of differential expression, co-expression network analysis, and multiple machine learning feature-selection approaches.
 
 ## Bioinformatics Workflow
 
